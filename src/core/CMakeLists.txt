@@ -1,5 +1,6 @@
 add_library(core STATIC
     Spice.cpp
+    TermInfo.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 

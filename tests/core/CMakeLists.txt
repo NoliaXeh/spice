@@ -1,5 +1,6 @@
 add_executable(core_test
     test_Spice.cpp
+    test_TermInfo.cpp
 )
 
 target_link_libraries(core_test PRIVATE core)
