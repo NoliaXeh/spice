@@ -9,6 +9,8 @@ struct Position {
     uint32_t line;
     uint32_t column;
     uint32_t layer;
+
+    auto operator==(Position const&) const -> bool = default;
 };
 
 }
