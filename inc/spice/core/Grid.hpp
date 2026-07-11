@@ -3,6 +3,7 @@
 
 #include "spice/core/Color.hpp"
 #include "spice/core/Position.hpp"
+#include "spice/core/Rectangle.hpp"
 #include "spice/core/TermInfo.hpp"
 #include <cstdint>
 #include <string>
@@ -57,6 +58,12 @@ public:
     //! a handful of bytes instead of a full-screen frame. Cropped like
     //! render(); out-of-grid cells are ignored.
     auto render_cell(TermInfo& terminfo, Position position, Position cell) -> void;
+
+    //! Renders only the cells of `rect` (grid coordinates, layers ignored)
+    //! of a grid placed at `position`: the partial-update path for damage
+    //! bigger than one cell but smaller than the screen. The rectangle is
+    //! clipped to the grid, then cropped to the terminal like render().
+    auto render_rect(TermInfo& terminfo, Position position, Rectangle rect) -> void;
 
 private:
     uint32_t _width;

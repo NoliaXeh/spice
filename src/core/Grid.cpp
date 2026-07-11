@@ -1,6 +1,7 @@
 #include "spice/core/Grid.hpp"
 #include "spice/core/Utf8.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <format>
@@ -134,17 +135,42 @@ auto Grid::set_background(Position position, Color color) -> bool {
 }
 
 auto Grid::render(TermInfo& terminfo, Position position) -> void {
+    render_rect(terminfo, position, Rectangle {
+        .position = { 0, 0, 0 },
+        .width = _width,
+        .height = _height,
+    });
+}
+
+auto Grid::render_cell(TermInfo& terminfo, Position position, Position cell) -> void {
+    render_rect(terminfo, position, Rectangle {
+        .position = { cell.line, cell.column, 0 },
+        .width = 1,
+        .height = 1,
+    });
+}
+
+auto Grid::render_rect(TermInfo& terminfo, Position position, Rectangle rect) -> void {
     uint32_t const term_width { terminfo.width() };
     uint32_t const term_height { terminfo.height() };
 
+    // clip the rectangle to the grid
+    if (rect.position.line >= _height || rect.position.column >= _width) {
+        return;
+    }
+    uint32_t const first_line { rect.position.line };
+    uint32_t const first_column { rect.position.column };
+    uint32_t const end_line { std::min(first_line + rect.height, _height) };
+    uint32_t const end_column { std::min(first_column + rect.width, _width) };
+
     std::string frame;
-    frame.reserve(static_cast<size_t>(_width) * _height * 4);
+    frame.reserve(static_cast<size_t>(rect.width) * rect.height * 4);
 
     Color last_style {};
     Color last_background {};
     bool first_cell { true };
 
-    for (uint32_t row { 0 }; row < _height; ++row) {
+    for (uint32_t row { first_line }; row < end_line; ++row) {
         uint32_t const term_row { position.line + row };
         if (term_row >= term_height) {
             break;
@@ -152,15 +178,15 @@ auto Grid::render(TermInfo& terminfo, Position position) -> void {
 
         std::format_to(
             std::back_inserter(frame), "\x1b[{};{}H",
-            term_row + 1, position.column + 1
+            term_row + 1, position.column + first_column + 1
         );
 
         // walk the line's utf-8 incrementally rather than through char_at,
         // which would re-scan the line from the start for every cell
         std::string const& line { _text[row] };
-        size_t offset { 0 };
+        size_t offset { column_offset(line, first_column) };
 
-        for (uint32_t column { 0 }; column < _width && offset < line.size(); ++column) {
+        for (uint32_t column { first_column }; column < end_column && offset < line.size(); ++column) {
             if (position.column + column >= term_width) {
                 break;
             }
@@ -184,24 +210,6 @@ auto Grid::render(TermInfo& terminfo, Position position) -> void {
 
     frame += "\x1b[0m";
     fwrite(frame.data(), 1, frame.size(), stdout);
-}
-
-auto Grid::render_cell(TermInfo& terminfo, Position position, Position cell) -> void {
-    if (!in_bounds(cell, _width, _height)) {
-        return;
-    }
-    uint32_t const term_row { position.line + cell.line };
-    uint32_t const term_column { position.column + cell.column };
-    if (term_row >= terminfo.height() || term_column >= terminfo.width()) {
-        return;
-    }
-
-    std::string out;
-    std::format_to(std::back_inserter(out), "\x1b[{};{}H", term_row + 1, term_column + 1);
-    append_sgr(out, style_at(cell), background_at(cell));
-    out += char_at(cell);
-    out += "\x1b[0m";
-    fwrite(out.data(), 1, out.size(), stdout);
 }
 
 }

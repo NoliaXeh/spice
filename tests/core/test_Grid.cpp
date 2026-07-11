@@ -142,3 +142,11 @@ TEST_CASE("core::Grid::render_cell() does not crash without a controlling termin
     grid.render_cell(terminfo, { 0, 0, 0 }, { 1, 1, 0 });
     grid.render_cell(terminfo, { 0, 0, 0 }, { 9, 9, 0 }); // out of grid: ignored
 }
+
+TEST_CASE("core::Grid::render_rect() does not crash without a controlling terminal") {
+    Grid grid { 4, 3 };
+    TermInfo terminfo;
+    grid.render_rect(terminfo, { 0, 0, 0 }, { { 1, 1, 0 }, 2, 2 });
+    grid.render_rect(terminfo, { 0, 0, 0 }, { { 1, 1, 0 }, 99, 99 }); // clipped to the grid
+    grid.render_rect(terminfo, { 0, 0, 0 }, { { 9, 9, 0 }, 2, 2 });   // out of grid: ignored
+}
