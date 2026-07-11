@@ -32,6 +32,18 @@ public:
     //! returns empty string_view of out of bound
     auto line_at(uint32_t lineno) -> std::string_view;
 
+    //! get the text color/style at position
+    //! returns a default-constructed Color if out of bound
+    auto style_at(Position position) -> Color;
+    //! returns false if position is out of bound
+    auto set_style(Position position, Color color) -> bool;
+
+    //! get the background color at position
+    //! returns a default-constructed Color if out of bound
+    auto background_at(Position position) -> Color;
+    //! returns false if position is out of bound
+    auto set_background(Position position, Color color) -> bool;
+
 private:
     uint32_t _width;
     uint32_t _height;

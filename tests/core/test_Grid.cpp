@@ -61,3 +61,68 @@ TEST_CASE("core::Grid::line_at() returns empty out of bounds") {
     Grid grid { 3, 2 };
     CHECK(grid.line_at(2).empty());
 }
+
+TEST_CASE("core::Grid starts out with a default (zeroed) style and background") {
+    Grid grid { 2, 2 };
+    Color const style { grid.style_at({ 0, 0, 0 }) };
+    Color const background { grid.background_at({ 0, 0, 0 }) };
+    CHECK_EQ(style.r, 0);
+    CHECK_EQ(style.g, 0);
+    CHECK_EQ(style.b, 0);
+    CHECK_EQ(background.r, 0);
+    CHECK_EQ(background.g, 0);
+    CHECK_EQ(background.b, 0);
+}
+
+TEST_CASE("core::Grid::set_style() and style_at() round-trip") {
+    Grid grid { 3, 1 };
+    Color const style {
+        .r = 10, .g = 20, .b = 30,
+        .style = { .bold = true, .italic = false, .underline = true,
+                   .strikethrought = false, .blinking = false, .selected = false },
+    };
+    CHECK(grid.set_style({ 0, 1, 0 }, style));
+
+    Color const got { grid.style_at({ 0, 1, 0 }) };
+    CHECK_EQ(got.r, 10);
+    CHECK_EQ(got.g, 20);
+    CHECK_EQ(got.b, 30);
+
+    bool const bold { got.style.bold };
+    bool const italic { got.style.italic };
+    bool const underline { got.style.underline };
+    CHECK(bold);
+    CHECK_FALSE(italic);
+    CHECK(underline);
+
+    // neighbouring cells untouched
+    Color const neighbour { grid.style_at({ 0, 0, 0 }) };
+    CHECK_EQ(neighbour.r, 0);
+}
+
+TEST_CASE("core::Grid::set_style() fails out of bounds") {
+    Grid grid { 2, 2 };
+    CHECK_FALSE(grid.set_style({ 5, 0, 0 }, {}));
+    CHECK_FALSE(grid.set_style({ 0, 5, 0 }, {}));
+}
+
+TEST_CASE("core::Grid::set_background() and background_at() round-trip") {
+    Grid grid { 3, 1 };
+    Color const background { .r = 1, .g = 2, .b = 3, .style = {} };
+    CHECK(grid.set_background({ 0, 1, 0 }, background));
+
+    Color const got { grid.background_at({ 0, 1, 0 }) };
+    CHECK_EQ(got.r, 1);
+    CHECK_EQ(got.g, 2);
+    CHECK_EQ(got.b, 3);
+
+    // neighbouring cells and text style untouched
+    Color const neighbour { grid.background_at({ 0, 0, 0 }) };
+    CHECK_EQ(neighbour.r, 0);
+}
+
+TEST_CASE("core::Grid::set_background() fails out of bounds") {
+    Grid grid { 2, 2 };
+    CHECK_FALSE(grid.set_background({ 5, 0, 0 }, {}));
+    CHECK_FALSE(grid.set_background({ 0, 5, 0 }, {}));
+}

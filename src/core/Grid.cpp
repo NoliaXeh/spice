@@ -26,6 +26,15 @@ auto column_offset(std::string const& line, uint32_t column) -> size_t {
     return offset;
 }
 
+auto in_bounds(spice::core::Position position, uint32_t width, uint32_t height) -> bool {
+    return position.line < height && position.column < width;
+}
+
+//! Index of `position` in the flat, row-major _text_color/_background_color vectors.
+auto cell_index(spice::core::Position position, uint32_t width) -> size_t {
+    return static_cast<size_t>(position.line) * width + position.column;
+}
+
 }
 
 namespace spice::core {
@@ -47,7 +56,7 @@ auto Grid::height() -> uint32_t {
 }
 
 auto Grid::char_at(Position position) -> std::string_view {
-    if (position.line >= _height || position.column >= _width) {
+    if (!in_bounds(position, _width, _height)) {
         return {};
     }
 
@@ -61,7 +70,7 @@ auto Grid::char_at(Position position) -> std::string_view {
 }
 
 auto Grid::set_text(Position position, std::string_view text) -> bool {
-    if (position.line >= _height || position.column >= _width || text.empty()) {
+    if (!in_bounds(position, _width, _height) || text.empty()) {
         return false;
     }
 
@@ -80,6 +89,36 @@ auto Grid::line_at(uint32_t lineno) -> std::string_view {
         return {};
     }
     return _text[lineno];
+}
+
+auto Grid::style_at(Position position) -> Color {
+    if (!in_bounds(position, _width, _height)) {
+        return {};
+    }
+    return _text_color[cell_index(position, _width)];
+}
+
+auto Grid::set_style(Position position, Color color) -> bool {
+    if (!in_bounds(position, _width, _height)) {
+        return false;
+    }
+    _text_color[cell_index(position, _width)] = color;
+    return true;
+}
+
+auto Grid::background_at(Position position) -> Color {
+    if (!in_bounds(position, _width, _height)) {
+        return {};
+    }
+    return _background_color[cell_index(position, _width)];
+}
+
+auto Grid::set_background(Position position, Color color) -> bool {
+    if (!in_bounds(position, _width, _height)) {
+        return false;
+    }
+    _background_color[cell_index(position, _width)] = color;
+    return true;
 }
 
 }
