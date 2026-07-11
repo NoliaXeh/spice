@@ -25,9 +25,9 @@ TEST_CASE("core::Theme default theme maps every usage") {
     Theme theme;
 
     Color const text { theme.color(Theme::Usage::text) };
-    CHECK_EQ(text.r, colors::white.r);
-    CHECK_EQ(text.g, colors::white.g);
-    CHECK_EQ(text.b, colors::white.b);
+    CHECK_EQ(text.r, colors::light_gray.r);
+    CHECK_EQ(text.g, colors::light_gray.g);
+    CHECK_EQ(text.b, colors::light_gray.b);
 
     Color const error { theme.color(Theme::Usage::error) };
     CHECK_EQ(error.r, colors::red.r);
@@ -46,5 +46,5 @@ TEST_CASE("core::Theme::set_color() round-trips") {
 
     // other usages untouched
     Color const text { theme.color(Theme::Usage::text) };
-    CHECK_EQ(text.r, colors::white.r);
+    CHECK_EQ(text.r, colors::light_gray.r);
 }
