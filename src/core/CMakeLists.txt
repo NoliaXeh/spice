@@ -3,6 +3,8 @@ add_library(core STATIC
     TermInfo.cpp
     Grid.cpp
     Theme.cpp
+    EventParser.cpp
+    EventReader.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 
