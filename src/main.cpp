@@ -61,37 +61,6 @@ auto make_demo_grid() -> Grid {
     return grid;
 }
 
-//! Prints one cell with its foreground/background truecolor and style flags,
-//! resetting all attributes afterwards so they don't bleed into the next cell.
-auto print_cell(Grid& grid, Position position) -> void {
-    Color const style { grid.style_at(position) };
-    Color const background { grid.background_at(position) };
-
-    std::print(
-        "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m",
-        style.r, style.g, style.b,
-        background.r, background.g, background.b
-    );
-
-    if (style.style.bold) std::print("\x1b[1m");
-    if (style.style.italic) std::print("\x1b[3m");
-    if (style.style.underline) std::print("\x1b[4m");
-    if (style.style.strikethrought) std::print("\x1b[9m");
-    if (style.style.selected) std::print("\x1b[7m");
-
-    std::print("{}", grid.char_at(position));
-    std::print("\x1b[0m");
-}
-
-auto print_grid(Grid& grid) -> void {
-    for (uint32_t line { 0 }; line < grid.height(); ++line) {
-        for (uint32_t column { 0 }; column < grid.width(); ++column) {
-            print_cell(grid, { line, column, 0 });
-        }
-        std::println("");
-    }
-}
-
 }
 
 int main() {
@@ -102,5 +71,6 @@ int main() {
     std::println("w={}, h={}, pid={}", ti.width(), ti.height(), ti.pid());
 
     auto grid { make_demo_grid() };
-    print_grid(grid);
+    grid.render(ti, { 2, 0, 0 });
+    std::println("");
 }

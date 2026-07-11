@@ -3,6 +3,7 @@
 
 #include "spice/core/Color.hpp"
 #include "spice/core/Position.hpp"
+#include "spice/core/TermInfo.hpp"
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -43,6 +44,11 @@ public:
     auto background_at(Position position) -> Color;
     //! returns false if position is out of bound
     auto set_background(Position position, Color color) -> bool;
+
+    //! Renders the grid to the current terminal, with the grid's top-left
+    //! cell placed at `position` (position.layer is ignored). Anything that
+    //! would fall outside terminfo's current width/height is cropped.
+    auto render(TermInfo& terminfo, Position position) -> void;
 
 private:
     uint32_t _width;

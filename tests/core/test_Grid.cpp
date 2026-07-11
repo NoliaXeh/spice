@@ -1,6 +1,7 @@
 #include "doctest.h"
 
 #include "spice/core/Grid.hpp"
+#include "spice/core/TermInfo.hpp"
 
 using namespace spice::core;
 
@@ -125,4 +126,12 @@ TEST_CASE("core::Grid::set_background() fails out of bounds") {
     Grid grid { 2, 2 };
     CHECK_FALSE(grid.set_background({ 5, 0, 0 }, {}));
     CHECK_FALSE(grid.set_background({ 0, 5, 0 }, {}));
+}
+
+TEST_CASE("core::Grid::render() does not crash without a controlling terminal") {
+    // Test runners have no tty, so TermInfo reports a 0x0 terminal here; this
+    // only exercises the crop guard, not actual on-screen cropping.
+    Grid grid { 3, 2 };
+    TermInfo terminfo;
+    grid.render(terminfo, { 0, 0, 0 });
 }

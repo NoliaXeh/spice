@@ -1,6 +1,7 @@
 #include "spice/core/Grid.hpp"
 
 #include <cstddef>
+#include <print>
 
 namespace {
 
@@ -119,6 +120,45 @@ auto Grid::set_background(Position position, Color color) -> bool {
     }
     _background_color[cell_index(position, _width)] = color;
     return true;
+}
+
+auto Grid::render(TermInfo& terminfo, Position position) -> void {
+    uint32_t const term_width { terminfo.width() };
+    uint32_t const term_height { terminfo.height() };
+
+    for (uint32_t row { 0 }; row < _height; ++row) {
+        uint32_t const term_row { position.line + row };
+        if (term_row >= term_height) {
+            break;
+        }
+
+        std::print("\x1b[{};{}H", term_row + 1, position.column + 1);
+
+        for (uint32_t column { 0 }; column < _width; ++column) {
+            if (position.column + column >= term_width) {
+                break;
+            }
+
+            Position const cell { row, column, 0 };
+            Color const style { style_at(cell) };
+            Color const background { background_at(cell) };
+
+            std::print(
+                "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m",
+                style.r, style.g, style.b,
+                background.r, background.g, background.b
+            );
+
+            if (style.style.bold) std::print("\x1b[1m");
+            if (style.style.italic) std::print("\x1b[3m");
+            if (style.style.underline) std::print("\x1b[4m");
+            if (style.style.strikethrought) std::print("\x1b[9m");
+            if (style.style.selected) std::print("\x1b[7m");
+
+            std::print("{}", char_at(cell));
+            std::print("\x1b[0m");
+        }
+    }
 }
 
 }
