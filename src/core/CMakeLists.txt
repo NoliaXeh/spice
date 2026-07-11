@@ -2,6 +2,7 @@ add_library(core STATIC
     Spice.cpp
     TermInfo.cpp
     Grid.cpp
+    Theme.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 
