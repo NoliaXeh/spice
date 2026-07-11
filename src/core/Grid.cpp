@@ -1,21 +1,12 @@
 #include "spice/core/Grid.hpp"
+#include "spice/core/Utf8.hpp"
 
 #include <cstddef>
 #include <print>
 
 namespace {
 
-//! Number of bytes in the UTF-8 character starting at `lead`.
-//! An invalid leading byte is treated as a single byte, so callers always
-//! make forward progress instead of looping on malformed input.
-auto utf8_length(char lead) -> size_t {
-    auto const byte { static_cast<unsigned char>(lead) };
-    if ((byte & 0x80) == 0x00) return 1;
-    if ((byte & 0xE0) == 0xC0) return 2;
-    if ((byte & 0xF0) == 0xE0) return 3;
-    if ((byte & 0xF8) == 0xF0) return 4;
-    return 1;
-}
+using spice::core::utf8_length;
 
 //! Byte offset of the start of the `column`-th UTF-8 character in `line`.
 //! Returns line.size() if `column` runs past the last character in the line.
