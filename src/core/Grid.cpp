@@ -2,10 +2,13 @@
 #include "spice/core/Utf8.hpp"
 
 #include <cstddef>
-#include <print>
+#include <cstdio>
+#include <format>
+#include <iterator>
 
 namespace {
 
+using spice::core::Color;
 using spice::core::utf8_length;
 
 //! Byte offset of the start of the `column`-th UTF-8 character in `line`.
@@ -25,6 +28,23 @@ auto in_bounds(spice::core::Position position, uint32_t width, uint32_t height) 
 //! Index of `position` in the flat, row-major _text_color/_background_color vectors.
 auto cell_index(spice::core::Position position, uint32_t width) -> size_t {
     return static_cast<size_t>(position.line) * width + position.column;
+}
+
+//! Appends one SGR sequence setting everything a cell needs: reset (to clear
+//! the previous cell's flags), style flags, then truecolor fg/bg.
+auto append_sgr(std::string& out, Color style, Color background) -> void {
+    out += "\x1b[0";
+    if (style.style.bold) out += ";1";
+    if (style.style.italic) out += ";3";
+    if (style.style.underline) out += ";4";
+    if (style.style.strikethrought) out += ";9";
+    if (style.style.blinking) out += ";5";
+    if (style.style.selected) out += ";7";
+    std::format_to(
+        std::back_inserter(out), ";38;2;{};{};{};48;2;{};{};{}m",
+        style.r, style.g, style.b,
+        background.r, background.g, background.b
+    );
 }
 
 }
@@ -117,39 +137,71 @@ auto Grid::render(TermInfo& terminfo, Position position) -> void {
     uint32_t const term_width { terminfo.width() };
     uint32_t const term_height { terminfo.height() };
 
+    std::string frame;
+    frame.reserve(static_cast<size_t>(_width) * _height * 4);
+
+    Color last_style {};
+    Color last_background {};
+    bool first_cell { true };
+
     for (uint32_t row { 0 }; row < _height; ++row) {
         uint32_t const term_row { position.line + row };
         if (term_row >= term_height) {
             break;
         }
 
-        std::print("\x1b[{};{}H", term_row + 1, position.column + 1);
+        std::format_to(
+            std::back_inserter(frame), "\x1b[{};{}H",
+            term_row + 1, position.column + 1
+        );
 
-        for (uint32_t column { 0 }; column < _width; ++column) {
+        // walk the line's utf-8 incrementally rather than through char_at,
+        // which would re-scan the line from the start for every cell
+        std::string const& line { _text[row] };
+        size_t offset { 0 };
+
+        for (uint32_t column { 0 }; column < _width && offset < line.size(); ++column) {
             if (position.column + column >= term_width) {
                 break;
             }
 
-            Position const cell { row, column, 0 };
-            Color const style { style_at(cell) };
-            Color const background { background_at(cell) };
+            size_t const length { utf8_length(line[offset]) };
+            size_t const index { cell_index({ row, column, 0 }, _width) };
+            Color const style { _text_color[index] };
+            Color const background { _background_color[index] };
 
-            std::print(
-                "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m",
-                style.r, style.g, style.b,
-                background.r, background.g, background.b
-            );
+            if (first_cell || style != last_style || background != last_background) {
+                append_sgr(frame, style, background);
+                last_style = style;
+                last_background = background;
+                first_cell = false;
+            }
 
-            if (style.style.bold) std::print("\x1b[1m");
-            if (style.style.italic) std::print("\x1b[3m");
-            if (style.style.underline) std::print("\x1b[4m");
-            if (style.style.strikethrought) std::print("\x1b[9m");
-            if (style.style.selected) std::print("\x1b[7m");
-
-            std::print("{}", char_at(cell));
-            std::print("\x1b[0m");
+            frame.append(line, offset, length);
+            offset += length;
         }
     }
+
+    frame += "\x1b[0m";
+    fwrite(frame.data(), 1, frame.size(), stdout);
+}
+
+auto Grid::render_cell(TermInfo& terminfo, Position position, Position cell) -> void {
+    if (!in_bounds(cell, _width, _height)) {
+        return;
+    }
+    uint32_t const term_row { position.line + cell.line };
+    uint32_t const term_column { position.column + cell.column };
+    if (term_row >= terminfo.height() || term_column >= terminfo.width()) {
+        return;
+    }
+
+    std::string out;
+    std::format_to(std::back_inserter(out), "\x1b[{};{}H", term_row + 1, term_column + 1);
+    append_sgr(out, style_at(cell), background_at(cell));
+    out += char_at(cell);
+    out += "\x1b[0m";
+    fwrite(out.data(), 1, out.size(), stdout);
 }
 
 }

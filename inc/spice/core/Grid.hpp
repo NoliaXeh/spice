@@ -48,7 +48,15 @@ public:
     //! Renders the grid to the current terminal, with the grid's top-left
     //! cell placed at `position` (position.layer is ignored). Anything that
     //! would fall outside terminfo's current width/height is cropped.
+    //! The frame is built in one buffer and written in one call, emitting
+    //! color codes only when they change between cells.
     auto render(TermInfo& terminfo, Position position) -> void;
+
+    //! Renders the single cell `cell` of a grid placed at `position`.
+    //! This is the cheap path for localized updates (typing, cursor edits):
+    //! a handful of bytes instead of a full-screen frame. Cropped like
+    //! render(); out-of-grid cells are ignored.
+    auto render_cell(TermInfo& terminfo, Position position, Position cell) -> void;
 
 private:
     uint32_t _width;

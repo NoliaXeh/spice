@@ -1,76 +1,161 @@
 #include <cstdint>
+#include <cstdio>
 #include <print>
 #include <string_view>
 
-#include "spice/core/Color.hpp"
+#include "spice/core/Event.hpp"
+#include "spice/core/EventReader.hpp"
 #include "spice/core/Grid.hpp"
 #include "spice/core/Position.hpp"
-#include "spice/core/Spice.hpp"
 #include "spice/core/TermInfo.hpp"
+#include "spice/core/Theme.hpp"
 
 using namespace spice;
-using core::Color;
 using core::Grid;
 using core::Position;
+using core::Theme;
 
 namespace {
 
-constexpr uint32_t demo_size { 15 };
+constexpr std::string_view hint {
+    "Spice POC - click/arrows move, type to overwrite, del/bksp erase, ctrl-w quits"
+};
 
-//! Builds a 15x15 grid: a letter per cell, a foreground hue and background
-//! shade derived from its position, and one of five style flags cycling
-//! across cells (never blinking - it's unpleasant on a real terminal).
-auto make_demo_grid() -> Grid {
-    Grid grid { demo_size, demo_size };
+//! A terminal-sized grid, themed text-on-background, with the hint on line 0.
+auto make_grid(core::TermInfo& terminfo, Theme const& theme) -> Grid {
+    Grid grid { terminfo.width(), terminfo.height() };
 
-    constexpr std::string_view alphabet { "ABCDEFGHIJKLMNOPQRSTUVWXYZ" };
-
-    for (uint32_t line { 0 }; line < demo_size; ++line) {
-        for (uint32_t column { 0 }; column < demo_size; ++column) {
-            Position const position { line, column, 0 };
-
-            char const letter { alphabet[(line * demo_size + column) % alphabet.size()] };
-            grid.set_text(position, std::string_view(&letter, 1));
-
-            auto const shade { static_cast<uint8_t>(column * 255 / (demo_size - 1)) };
-            auto const style_index { (line + column) % 5 };
-
-            grid.set_style(position, Color {
-                .r = shade,
-                .g = static_cast<uint8_t>(line * 255 / (demo_size - 1)),
-                .b = static_cast<uint8_t>(255 - shade),
-                .style = {
-                    .bold = style_index == 0,
-                    .italic = style_index == 1,
-                    .underline = style_index == 2,
-                    .strikethrought = style_index == 3,
-                    .blinking = false,
-                    .selected = style_index == 4,
-                },
-            });
-
-            grid.set_background(position, Color {
-                .r = static_cast<uint8_t>(line * 8),
-                .g = static_cast<uint8_t>(column * 8),
-                .b = 32,
-                .style = {},
-            });
+    for (uint32_t line { 0 }; line < grid.height(); ++line) {
+        for (uint32_t column { 0 }; column < grid.width(); ++column) {
+            Position const cell { line, column, 0 };
+            grid.set_style(cell, theme.color(Theme::Usage::text));
+            grid.set_background(cell, theme.color(Theme::Usage::background));
         }
+    }
+
+    for (uint32_t i { 0 }; i < hint.size() && i < grid.width(); ++i) {
+        Position const cell { 0, i, 0 };
+        grid.set_text(cell, hint.substr(i, 1));
+        grid.set_style(cell, theme.color(Theme::Usage::info));
     }
 
     return grid;
 }
 
+//! Puts the terminal cursor on the edited cell.
+auto park_cursor(Position cursor) -> void {
+    std::print("\x1b[{};{}H", cursor.line + 1, cursor.column + 1);
+    std::fflush(stdout);
+}
+
+//! One cell forward, wrapping to the next line; stays put on the last cell.
+auto advance(Grid& grid, Position& cursor) -> void {
+    if (cursor.column + 1 < grid.width()) {
+        ++cursor.column;
+    } else if (cursor.line + 1 < grid.height()) {
+        cursor.column = 0;
+        ++cursor.line;
+    }
+}
+
+//! One cell back, wrapping to the end of the previous line; stays put on (0,0).
+auto retreat(Grid& grid, Position& cursor) -> void {
+    if (cursor.column > 0) {
+        --cursor.column;
+    } else if (cursor.line > 0) {
+        --cursor.line;
+        cursor.column = grid.width() - 1;
+    }
+}
+
+//! Blanks the cell under the cursor and repaints it.
+auto erase(Grid& grid, core::TermInfo& terminfo, Position cursor) -> void {
+    grid.set_text(cursor, " ");
+    grid.render_cell(terminfo, { 0, 0, 0 }, cursor);
+}
+
 }
 
 int main() {
-    auto sp { core::Spice("Spice") };
-    std::println("Hello {}!", sp.name());
+    core::TermInfo terminfo;
+    if (terminfo.width() == 0 || terminfo.height() == 0) {
+        std::println("spice: no terminal to draw on");
+        return 1;
+    }
 
-    auto ti { core::TermInfo() };
-    std::println("w={}, h={}, pid={}", ti.width(), ti.height(), ti.pid());
+    Theme const theme;
+    auto grid { make_grid(terminfo, theme) };
+    Position cursor { 1, 0, 0 }; // just below the hint line
 
-    auto grid { make_demo_grid() };
-    grid.render(ti, { 2, 0, 0 });
-    std::println("");
+    std::print("\x1b[?1049h"); // alternate screen; the shell gets its scrollback back on exit
+    std::fflush(stdout);
+    core::EventReader reader;
+
+    grid.render(terminfo, { 0, 0, 0 }); // the only full-screen frame
+    park_cursor(cursor);
+
+    bool running { true };
+    while (running) {
+        auto const event { reader.poll(100) };
+        if (!event) {
+            continue;
+        }
+
+        if (event->type == core::EventType::key) {
+            auto const& key { event->key };
+            switch (key.key) {
+            case core::Key::character:
+                if (key.mods.ctrl && key.text == "w") {
+                    running = false;
+                } else if (!key.mods.ctrl && !key.mods.alt) {
+                    grid.set_text(cursor, key.text);
+                    grid.render_cell(terminfo, { 0, 0, 0 }, cursor); // repaint just that cell
+                    advance(grid, cursor);
+                    park_cursor(cursor);
+                }
+                break;
+            case core::Key::up:
+                if (cursor.line > 0) --cursor.line;
+                park_cursor(cursor);
+                break;
+            case core::Key::down:
+                if (cursor.line + 1 < grid.height()) ++cursor.line;
+                park_cursor(cursor);
+                break;
+            case core::Key::left:
+                if (cursor.column > 0) --cursor.column;
+                park_cursor(cursor);
+                break;
+            case core::Key::right:
+                if (cursor.column + 1 < grid.width()) ++cursor.column;
+                park_cursor(cursor);
+                break;
+            case core::Key::enter:
+                cursor.column = 0;
+                if (cursor.line + 1 < grid.height()) ++cursor.line;
+                park_cursor(cursor);
+                break;
+            case core::Key::del: // erase under the cursor, stay put
+                erase(grid, terminfo, cursor);
+                park_cursor(cursor);
+                break;
+            case core::Key::backspace: // step back, erase what's there
+                retreat(grid, cursor);
+                erase(grid, terminfo, cursor);
+                park_cursor(cursor);
+                break;
+            default:
+                break;
+            }
+        } else if (event->mouse.action == core::MouseAction::press
+                   && event->mouse.button == core::MouseButton::left) {
+            cursor = event->mouse.position;
+            if (cursor.line >= grid.height()) cursor.line = grid.height() - 1;
+            if (cursor.column >= grid.width()) cursor.column = grid.width() - 1;
+            park_cursor(cursor); // nothing changed in the grid; just move the cursor
+        }
+    }
+
+    std::print("\x1b[?1049l");
+    std::fflush(stdout);
 }

@@ -135,3 +135,10 @@ TEST_CASE("core::Grid::render() does not crash without a controlling terminal") 
     TermInfo terminfo;
     grid.render(terminfo, { 0, 0, 0 });
 }
+
+TEST_CASE("core::Grid::render_cell() does not crash without a controlling terminal") {
+    Grid grid { 3, 2 };
+    TermInfo terminfo;
+    grid.render_cell(terminfo, { 0, 0, 0 }, { 1, 1, 0 });
+    grid.render_cell(terminfo, { 0, 0, 0 }, { 9, 9, 0 }); // out of grid: ignored
+}

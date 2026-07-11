@@ -11,11 +11,15 @@ struct StyleFlags {
     bool strikethrought: 1;
     bool blinking: 1;
     bool selected: 1;
+
+    auto operator==(StyleFlags const&) const -> bool = default;
 };
 
 struct Color {
     uint8_t r, g, b;
     StyleFlags style;
+
+    auto operator==(Color const&) const -> bool = default;
 };
 
 //! Usual colors, plain style. Combine with designated initializers or
