@@ -26,16 +26,18 @@ struct Color {
 //! mutate a copy when a styled variant is needed.
 namespace colors {
 
-inline constexpr Color black   { .r = 0x00, .g = 0x00, .b = 0x00, .style = {} };
-inline constexpr Color white   { .r = 0xFF, .g = 0xFF, .b = 0xFF, .style = {} };
-inline constexpr Color gray    { .r = 0x80, .g = 0x80, .b = 0x80, .style = {} };
-inline constexpr Color red     { .r = 0xFF, .g = 0x00, .b = 0x00, .style = {} };
-inline constexpr Color green   { .r = 0x00, .g = 0xFF, .b = 0x00, .style = {} };
-inline constexpr Color blue    { .r = 0x00, .g = 0x00, .b = 0xFF, .style = {} };
-inline constexpr Color yellow  { .r = 0xFF, .g = 0xFF, .b = 0x00, .style = {} };
-inline constexpr Color cyan    { .r = 0x00, .g = 0xFF, .b = 0xFF, .style = {} };
-inline constexpr Color magenta { .r = 0xFF, .g = 0x00, .b = 0xFF, .style = {} };
-inline constexpr Color orange  { .r = 0xFF, .g = 0xA5, .b = 0x00, .style = {} };
+inline constexpr Color black         { .r = 0x00, .g = 0x00, .b = 0x00, .style = {} };
+inline constexpr Color white         { .r = 0xFF, .g = 0xFF, .b = 0xFF, .style = {} };
+inline constexpr Color light_gray    { .r = 0xEE, .g = 0xEE, .b = 0xEE, .style = {} };
+inline constexpr Color gray          { .r = 0x80, .g = 0x80, .b = 0x80, .style = {} };
+inline constexpr Color dark_gray     { .r = 0x33, .g = 0x33, .b = 0x44, .style = {} };
+inline constexpr Color red           { .r = 0xFF, .g = 0x00, .b = 0x00, .style = {} };
+inline constexpr Color green         { .r = 0x00, .g = 0xFF, .b = 0x00, .style = {} };
+inline constexpr Color blue          { .r = 0x00, .g = 0x00, .b = 0xFF, .style = {} };
+inline constexpr Color yellow        { .r = 0xFF, .g = 0xFF, .b = 0x00, .style = {} };
+inline constexpr Color cyan          { .r = 0x00, .g = 0xFF, .b = 0xFF, .style = {} };
+inline constexpr Color magenta       { .r = 0xFF, .g = 0x00, .b = 0xFF, .style = {} };
+inline constexpr Color orange        { .r = 0xFF, .g = 0xA5, .b = 0x00, .style = {} };
 
 }
 

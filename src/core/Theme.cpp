@@ -1,4 +1,5 @@
 #include "spice/core/Theme.hpp"
+#include "spice/core/Color.hpp"
 
 #include <cstddef>
 
@@ -16,8 +17,8 @@ auto bold(Color color) -> Color {
 namespace spice::core {
 
 Theme::Theme() {
-    set_color(Usage::text, colors::white);
-    set_color(Usage::background, colors::black);
+    set_color(Usage::text, colors::light_gray);
+    set_color(Usage::background, colors::dark_gray);
     set_color(Usage::selection_text, colors::black);
     set_color(Usage::selection_background, colors::cyan);
     set_color(Usage::cursor, colors::white);
