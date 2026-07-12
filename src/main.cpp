@@ -1,96 +1,31 @@
 #include <cstdint>
 #include <cstdio>
-#include <deque>
 #include <format>
 #include <print>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "spice/core/Event.hpp"
 #include "spice/core/EventReader.hpp"
 #include "spice/core/Grid.hpp"
 #include "spice/core/Position.hpp"
 #include "spice/core/Rectangle.hpp"
+#include "spice/core/Spice.hpp"
 #include "spice/core/TermInfo.hpp"
 #include "spice/core/Theme.hpp"
 
 using namespace spice;
 using core::Grid;
 using core::Position;
+using core::Rectangle;
 using core::Theme;
 
 namespace {
 
-constexpr std::string_view hint {
-    "Spice POC - click/arrows move, type to overwrite, del/bksp erase, ctrl-w quits"
-};
-
-//! A terminal-sized grid, themed text-on-background, with the hint on line 0.
-auto make_grid(core::TermInfo& terminfo, Theme const& theme) -> Grid {
-    Grid grid { terminfo.width(), terminfo.height() };
-
-    for (uint32_t line { 0 }; line < grid.height(); ++line) {
-        for (uint32_t column { 0 }; column < grid.width(); ++column) {
-            Position const cell { line, column, 0 };
-            grid.set_style(cell, theme.color(Theme::Usage::text));
-            grid.set_background(cell, theme.color(Theme::Usage::background));
-        }
-    }
-
-    for (uint32_t i { 0 }; i < hint.size() && i < grid.width(); ++i) {
-        Position const cell { 0, i, 0 };
-        grid.set_text(cell, hint.substr(i, 1));
-        grid.set_style(cell, theme.color(Theme::Usage::info));
-    }
-
-    return grid;
-}
-
-//! Puts the terminal cursor on the edited cell.
-auto park_cursor(Position cursor) -> void {
-    std::print("\x1b[{};{}H", cursor.line + 1, cursor.column + 1);
-    std::fflush(stdout);
-}
-
-//! One cell forward, wrapping to the next line; stays put on the last cell.
-auto advance(Grid& grid, Position& cursor) -> void {
-    if (cursor.column + 1 < grid.width()) {
-        ++cursor.column;
-    } else if (cursor.line + 1 < grid.height()) {
-        cursor.column = 0;
-        ++cursor.line;
-    }
-}
-
-//! One cell back, wrapping to the end of the previous line; stays put on (0,0).
-auto retreat(Grid& grid, Position& cursor) -> void {
-    if (cursor.column > 0) {
-        --cursor.column;
-    } else if (cursor.line > 0) {
-        --cursor.line;
-        cursor.column = grid.width() - 1;
-    }
-}
-
-//! Blanks the cell under the cursor and repaints it.
-auto erase(Grid& grid, core::TermInfo& terminfo, Position cursor) -> void {
-    grid.set_text(cursor, " ");
-    grid.render_cell(terminfo, { 0, 0, 0 }, cursor);
-}
-
 // ---------------------------------------------------------------
-// Event log box, bottom-right corner
+// Event descriptions (for the floating "events" pane)
 // ---------------------------------------------------------------
-
-constexpr uint32_t log_width { 30 };
-constexpr uint32_t log_height { 3 }; // keeps the last 3 events
-
-//! Where the log box sits: bottom-right of the grid, shrunk to fit.
-auto log_rect(Grid& grid) -> core::Rectangle {
-    uint32_t const width { log_width < grid.width() ? log_width : grid.width() };
-    uint32_t const height { log_height < grid.height() ? log_height : grid.height() };
-    return { { grid.height() - height, grid.width() - width, 0 }, width, height };
-}
 
 auto mods_text(core::Modifiers mods) -> std::string {
     std::string out;
@@ -170,36 +105,77 @@ auto describe(core::Event const& event) -> std::string {
     );
 }
 
-//! Writes the last events into the log box (newest at the bottom) and
-//! repaints only that rectangle.
-auto show_events(
-    Grid& grid, core::TermInfo& terminfo, Theme const& theme,
-    std::deque<std::string> const& log
-) -> void {
-    auto const rect { log_rect(grid) };
+// ---------------------------------------------------------------
+// Editing on the focused pane
+// ---------------------------------------------------------------
 
-    for (uint32_t row { 0 }; row < rect.height; ++row) {
-        // bottom row shows the newest entry
-        size_t const from_bottom { rect.height - row };
-        std::string_view text;
-        if (log.size() >= from_bottom) {
-            text = log[log.size() - from_bottom];
-        }
+//! Applies an editing key to a pane; returns true if it did anything.
+auto edit_pane(core::Pane& pane, core::KeyEvent const& key) -> bool {
+    auto& buffer { *pane.buffer() };
+    Position const cursor { pane.cursor() };
 
-        for (uint32_t column { 0 }; column < rect.width; ++column) {
-            Position const cell {
-                rect.position.line + row,
-                rect.position.column + column,
-                0,
-            };
-            char const glyph { column < text.size() ? text[column] : ' ' };
-            grid.set_text(cell, std::string_view(&glyph, 1));
-            grid.set_style(cell, theme.color(Theme::Usage::info));
-            grid.set_background(cell, core::colors::black);
+    switch (key.key) {
+    case core::Key::character:
+        if (buffer.insert(cursor, key.text)) {
+            pane.set_cursor({ cursor.line, cursor.column + 1, 0 });
+            return true;
         }
+        return false;
+
+    case core::Key::enter:
+        if (buffer.split_line(cursor)) {
+            pane.set_cursor({ cursor.line + 1, 0, 0 });
+            return true;
+        }
+        return false;
+
+    case core::Key::backspace:
+        if (cursor.column > 0) {
+            if (buffer.erase({ cursor.line, cursor.column - 1, 0 })) {
+                pane.set_cursor({ cursor.line, cursor.column - 1, 0 });
+                return true;
+            }
+        } else if (cursor.line > 0) { // join with the previous line
+            uint32_t const column { buffer.line_length(cursor.line - 1) };
+            if (buffer.erase({ cursor.line - 1, column, 0 })) {
+                pane.set_cursor({ cursor.line - 1, column, 0 });
+                return true;
+            }
+        }
+        return false;
+
+    case core::Key::del:
+        return buffer.erase(cursor);
+
+    case core::Key::left:
+        if (cursor.column > 0) {
+            pane.set_cursor({ cursor.line, cursor.column - 1, 0 });
+        } else if (cursor.line > 0) {
+            pane.set_cursor({ cursor.line - 1, buffer.line_length(cursor.line - 1), 0 });
+        }
+        return true;
+
+    case core::Key::right:
+        if (cursor.column < buffer.line_length(cursor.line)) {
+            pane.set_cursor({ cursor.line, cursor.column + 1, 0 });
+        } else if (cursor.line + 1 < buffer.line_count()) {
+            pane.set_cursor({ cursor.line + 1, 0, 0 });
+        }
+        return true;
+
+    case core::Key::up:
+        if (cursor.line > 0) {
+            pane.set_cursor({ cursor.line - 1, cursor.column, 0 });
+        }
+        return true;
+
+    case core::Key::down:
+        pane.set_cursor({ cursor.line + 1, cursor.column, 0 }); // set_cursor clamps
+        return true;
+
+    default:
+        return false;
     }
-
-    grid.render_rect(terminfo, { 0, 0, 0 }, rect);
 }
 
 }
@@ -212,17 +188,64 @@ int main() {
     }
 
     Theme const theme;
-    auto grid { make_grid(terminfo, theme) };
-    Position cursor { 1, 0, 0 }; // just below the hint line
+    Grid grid { terminfo.width(), terminfo.height() };
+    Rectangle const screen { { 0, 0, 0 }, terminfo.width(), terminfo.height() };
 
-    std::print("\x1b[?1049h"); // alternate screen; the shell gets its scrollback back on exit
+    core::Spice session { "Spice" };
+    session.set_screen(screen);
+    uint32_t const welcome { session.open_welcome_pane() };
+
+    // the event log: an append-only buffer in a floating grid pane,
+    // bottom-right, on top of the split tree
+    auto log_buffer {
+        session.create_buffer("events", core::BufferCapability::append_only, "events")
+    };
+    uint32_t const log_width { screen.width / 3 > 20 ? screen.width / 3 : 20 };
+    Rectangle const log_area {
+        { screen.height - screen.height / 3, screen.width - log_width, 0 },
+        log_width,
+        screen.height / 3,
+    };
+    uint32_t const log_pane { session.open_float(core::PaneType::grid, log_buffer, log_area) };
+    session.focus(welcome);
+
+    std::print("\x1b[?1049h"); // alternate screen
     std::fflush(stdout);
     core::EventReader reader;
 
-    grid.render(terminfo, { 0, 0, 0 }); // the only full-screen frame
-    park_cursor(cursor);
+    uint32_t scratch_count { 0 };
 
-    std::deque<std::string> event_log;
+    //! Clears the grid, draws every pane, renders `rects` (all when empty),
+    //! and parks the terminal cursor on the focused pane's cursor.
+    auto const repaint = [&](std::vector<Rectangle> const& rects) {
+        for (uint32_t line { 0 }; line < grid.height(); ++line) {
+            for (uint32_t column { 0 }; column < grid.width(); ++column) {
+                Position const cell { line, column, 0 };
+                grid.set_text(cell, " ");
+                grid.set_style(cell, theme.color(Theme::Usage::text));
+                grid.set_background(cell, theme.color(Theme::Usage::background));
+            }
+        }
+        session.draw(grid, theme);
+
+        if (rects.empty()) {
+            grid.render(terminfo, { 0, 0, 0 });
+        } else {
+            for (Rectangle const& rect : rects) {
+                grid.render_rect(terminfo, { 0, 0, 0 }, rect);
+            }
+        }
+
+        if (auto* focused { session.focused_pane() }) {
+            if (auto const area { session.pane_area(session.focused_id()) }) {
+                Position const at { focused->cursor_screen_position(*area) };
+                std::print("\x1b[{};{}H", at.line + 1, at.column + 1);
+            }
+        }
+        std::fflush(stdout);
+    };
+
+    repaint({}); // first full frame
 
     bool running { true };
     while (running) {
@@ -231,58 +254,85 @@ int main() {
             continue;
         }
 
-        event_log.push_back(describe(*event));
-        while (event_log.size() > log_height) {
-            event_log.pop_front();
+        std::vector<Rectangle> damage;
+        bool full_repaint { false };
+
+        // every event lands in the log buffer, pane or no pane
+        log_buffer->append("\n" + describe(*event));
+        if (auto* pane { session.pane(log_pane) }) {
+            if (auto const area { session.pane_area(log_pane) }) {
+                pane->scroll_to_bottom(*area);
+                damage.push_back(*area);
+            }
         }
+
+        auto const focused_area = [&]() {
+            if (auto const area { session.pane_area(session.focused_id()) }) {
+                damage.push_back(*area);
+            }
+        };
 
         if (event->type == core::EventType::key) {
             auto const& key { event->key };
-            switch (key.key) {
-            case core::Key::character:
-                if (key.mods.ctrl && key.text == "w") {
+            if (key.mods.ctrl && key.key == core::Key::character) {
+                if (key.text == "w") { // close Spice
                     running = false;
-                } else if (!key.mods.ctrl && !key.mods.alt) {
-                    grid.set_text(cursor, key.text);
-                    grid.render_cell(terminfo, { 0, 0, 0 }, cursor); // repaint just that cell
-                    advance(grid, cursor);
+                } else if (key.text == "n") { // open a new pane
+                    auto buffer { session.create_buffer(
+                        std::format("scratch-{}", ++scratch_count),
+                        core::BufferCapability::editable
+                    ) };
+                    session.open_pane(core::PaneType::edit, std::move(buffer));
+                    full_repaint = true;
+                } else if (key.text == "x") { // close the current pane
+                    session.close_focused_pane();
+                    if (session.pane_count() == 0) {
+                        running = false; // all panes closed: the program ends
+                    }
+                    full_repaint = true;
+                } else if (key.text == "f") { // float
+                    session.float_focused();
+                    full_repaint = true;
+                } else if (key.text == "d") { // dock
+                    session.dock_focused();
+                    full_repaint = true;
                 }
-                break;
-            case core::Key::up:
-                if (cursor.line > 0) --cursor.line;
-                break;
-            case core::Key::down:
-                if (cursor.line + 1 < grid.height()) ++cursor.line;
-                break;
-            case core::Key::left:
-                if (cursor.column > 0) --cursor.column;
-                break;
-            case core::Key::right:
-                if (cursor.column + 1 < grid.width()) ++cursor.column;
-                break;
-            case core::Key::enter:
-                cursor.column = 0;
-                if (cursor.line + 1 < grid.height()) ++cursor.line;
-                break;
-            case core::Key::del: // erase under the cursor, stay put
-                erase(grid, terminfo, cursor);
-                break;
-            case core::Key::backspace: // step back, erase what's there
-                retreat(grid, cursor);
-                erase(grid, terminfo, cursor);
-                break;
-            default:
-                break;
+            } else if (key.mods.ctrl
+                       && (key.key == core::Key::up || key.key == core::Key::down
+                           || key.key == core::Key::left || key.key == core::Key::right)) {
+                focused_area(); // old pane loses the focused border
+                switch (key.key) {
+                    case core::Key::up: session.move_focus(core::Direction::up); break;
+                    case core::Key::down: session.move_focus(core::Direction::down); break;
+                    case core::Key::left: session.move_focus(core::Direction::left); break;
+                    default: session.move_focus(core::Direction::right); break;
+                }
+                focused_area(); // new pane gains it
+            } else if (!key.mods.ctrl && !key.mods.alt) {
+                if (auto* pane { session.focused_pane() }) {
+                    if (edit_pane(*pane, key)) {
+                        focused_area();
+                    }
+                }
             }
         } else if (event->mouse.action == core::MouseAction::press
                    && event->mouse.button == core::MouseButton::left) {
-            cursor = event->mouse.position;
-            if (cursor.line >= grid.height()) cursor.line = grid.height() - 1;
-            if (cursor.column >= grid.width()) cursor.column = grid.width() - 1;
+            Position const point { event->mouse.position };
+            if (auto const id { session.pane_at(point) }) {
+                focused_area(); // old focus border
+                session.focus(*id);
+                if (auto* pane { session.pane(*id) }) {
+                    if (auto const area { session.pane_area(*id) }) {
+                        pane->set_cursor(pane->position_from_screen(*area, point));
+                    }
+                }
+                focused_area(); // new focus border + cursor
+            }
         }
 
-        show_events(grid, terminfo, theme, event_log);
-        park_cursor(cursor);
+        if (running) {
+            repaint(full_repaint ? std::vector<Rectangle> {} : damage);
+        }
     }
 
     std::print("\x1b[?1049l");
