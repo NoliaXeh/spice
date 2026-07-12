@@ -1,9 +1,201 @@
 #include "spice/core/Spice.hpp"
 
-spice::core::Spice::Spice(std::string&& name)
+#include <utility>
+
+namespace {
+
+constexpr std::string_view welcome_text {
+    "Welcome to Spice!\n"
+    "\n"
+    "The buffer manager made to match any taste.\n"
+    "\n"
+    "  ctrl-n  open a new pane\n"
+    "  ctrl-x  close the current pane\n"
+    "  ctrl-arrows  move focus\n"
+    "  ctrl-f  float the current pane\n"
+    "  ctrl-d  dock it back\n"
+    "  ctrl-w  close Spice\n"
+};
+
+}
+
+namespace spice::core {
+
+Spice::Spice(std::string&& name)
     : _name { std::move(name) }
 {}
 
-auto spice::core::Spice::name() const -> std::string const& {
+auto Spice::name() const -> std::string const& {
     return _name;
+}
+
+auto Spice::set_screen(Rectangle screen) -> void {
+    _screen = screen;
+}
+
+auto Spice::create_buffer(
+    std::string&& name, BufferCapability capability, std::string_view content
+) -> std::shared_ptr<Buffer> {
+    return _buffers.emplace_back(
+        std::make_shared<Buffer>(std::move(name), capability, content)
+    );
+}
+
+auto Spice::buffers() const -> std::vector<std::shared_ptr<Buffer>> const& {
+    return _buffers;
+}
+
+auto Spice::split_is_horizontal(Rectangle rect) const -> bool {
+    // terminal cells are about twice as tall as wide, so a tile is only
+    // "wide" once its width passes twice its height
+    return rect.width >= rect.height * 2;
+}
+
+auto Spice::insertion_target() const -> uint32_t {
+    if (_focused != 0 && _layout.contains(_focused) && !_layout.is_floating(_focused)) {
+        return _focused;
+    }
+    uint32_t best { 0 };
+    uint64_t best_area { 0 };
+    for (auto const& [id, rect] : _layout.tiles(_screen)) {
+        uint64_t const area { static_cast<uint64_t>(rect.width) * rect.height };
+        if (area >= best_area) {
+            best = id;
+            best_area = area;
+        }
+    }
+    return best;
+}
+
+auto Spice::open_pane(PaneType type, std::shared_ptr<Buffer> buffer) -> uint32_t {
+    uint32_t const id { _next_pane_id++ };
+    uint32_t const at { insertion_target() };
+    bool horizontal { true };
+    if (auto const rect { pane_area(at) }) {
+        horizontal = split_is_horizontal(*rect);
+    }
+    _layout.insert(id, at, horizontal);
+    _panes.emplace(id, Pane { type, std::move(buffer) });
+    _focused = id;
+    return id;
+}
+
+auto Spice::open_float(PaneType type, std::shared_ptr<Buffer> buffer, Rectangle rect)
+    -> uint32_t {
+    uint32_t const id { _next_pane_id++ };
+    _layout.float_pane(id, rect);
+    _panes.emplace(id, Pane { type, std::move(buffer) });
+    _focused = id;
+    return id;
+}
+
+auto Spice::open_welcome_pane() -> uint32_t {
+    auto buffer { create_buffer("Welcome", BufferCapability::editable, welcome_text) };
+    return open_pane(PaneType::edit, std::move(buffer));
+}
+
+auto Spice::close_focused_pane() -> void {
+    if (_focused == 0) {
+        return;
+    }
+    _layout.remove(_focused);
+    _panes.erase(_focused); // the buffer stays in _buffers
+
+    _focused = 0;
+    auto const floats { _layout.floats() };
+    if (!floats.empty()) {
+        _focused = floats.back().first; // topmost float
+    } else if (auto const tiles { _layout.tiles(_screen) }; !tiles.empty()) {
+        _focused = tiles.front().first;
+    }
+}
+
+auto Spice::pane_count() const -> size_t {
+    return _panes.size();
+}
+
+auto Spice::pane(uint32_t id) -> Pane* {
+    auto const found { _panes.find(id) };
+    return found != _panes.end() ? &found->second : nullptr;
+}
+
+auto Spice::focused_id() const -> uint32_t {
+    return _focused;
+}
+
+auto Spice::focused_pane() -> Pane* {
+    return pane(_focused);
+}
+
+auto Spice::focus(uint32_t id) -> void {
+    if (_panes.contains(id)) {
+        _focused = id;
+    }
+}
+
+auto Spice::move_focus(Direction direction) -> void {
+    if (auto const next { _layout.neighbor(_screen, _focused, direction) }) {
+        _focused = *next;
+    }
+}
+
+auto Spice::float_focused() -> void {
+    if (_focused == 0) {
+        return;
+    }
+    Rectangle const rect { // centered, half the screen each way
+        {
+            _screen.position.line + _screen.height / 4,
+            _screen.position.column + _screen.width / 4,
+            0,
+        },
+        _screen.width / 2,
+        _screen.height / 2,
+    };
+    _layout.float_pane(_focused, rect);
+}
+
+auto Spice::dock_focused() -> void {
+    if (_focused == 0 || !_layout.is_floating(_focused)) {
+        return;
+    }
+    uint32_t const at { insertion_target() };
+    bool horizontal { true };
+    if (auto const rect { pane_area(at) }) {
+        horizontal = split_is_horizontal(*rect);
+    }
+    _layout.dock_pane(_focused, at, horizontal);
+}
+
+auto Spice::pane_at(Position point) const -> std::optional<uint32_t> {
+    return _layout.pane_at(_screen, point);
+}
+
+auto Spice::pane_area(uint32_t id) const -> std::optional<Rectangle> {
+    for (auto const& [pane, rect] : _layout.floats()) {
+        if (pane == id) {
+            return rect;
+        }
+    }
+    for (auto const& [pane, rect] : _layout.tiles(_screen)) {
+        if (pane == id) {
+            return rect;
+        }
+    }
+    return std::nullopt;
+}
+
+auto Spice::draw(Grid& grid, Theme const& theme) -> void {
+    for (auto const& [id, rect] : _layout.tiles(_screen)) {
+        if (auto* p { pane(id) }) {
+            p->draw(grid, rect, id == _focused, theme);
+        }
+    }
+    for (auto const& [id, rect] : _layout.floats()) { // bottom to top
+        if (auto* p { pane(id) }) {
+            p->draw(grid, rect, id == _focused, theme);
+        }
+    }
+}
+
 }

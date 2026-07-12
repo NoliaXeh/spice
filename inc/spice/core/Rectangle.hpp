@@ -14,6 +14,12 @@ struct Rectangle {
     uint32_t height;
 
     auto operator==(Rectangle const&) const -> bool = default;
+
+    //! Whether `point` falls inside the rectangle (layers are ignored).
+    constexpr auto contains(Position point) const -> bool {
+        return point.line >= position.line && point.line < position.line + height
+            && point.column >= position.column && point.column < position.column + width;
+    }
 };
 
 }

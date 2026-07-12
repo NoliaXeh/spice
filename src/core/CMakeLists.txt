@@ -5,6 +5,9 @@ add_library(core STATIC
     Theme.cpp
     EventParser.cpp
     EventReader.cpp
+    Buffer.cpp
+    Layout.cpp
+    Pane.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 
