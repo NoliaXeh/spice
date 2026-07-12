@@ -1,9 +1,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <format>
+#include <functional>
 #include <print>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "spice/core/Event.hpp"
@@ -89,19 +91,28 @@ auto button_name(core::MouseButton button) -> std::string_view {
     return "?";
 }
 
-auto describe(core::Event const& event) -> std::string {
+//! The position-independent identity of an event, used both as the key of
+//! the binding map and inside describe(): "C-'w'", "S-up", "press left"...
+auto event_id(core::Event const& event) -> std::string {
     if (event.type == core::EventType::key) {
         auto const& key { event.key };
         if (key.key == core::Key::character) {
-            return std::format("key {}'{}'", mods_text(key.mods), key.text);
+            return std::format("{}'{}'", mods_text(key.mods), key.text);
         }
-        return std::format("key {}{}", mods_text(key.mods), key_name(key.key));
+        return std::format("{}{}", mods_text(key.mods), key_name(key.key));
     }
     auto const& mouse { event.mouse };
     return std::format(
-        "mouse {}{} {} {}:{}",
-        mods_text(mouse.mods), action_name(mouse.action), button_name(mouse.button),
-        mouse.position.line, mouse.position.column
+        "{}{} {}", mods_text(mouse.mods), action_name(mouse.action), button_name(mouse.button)
+    );
+}
+
+auto describe(core::Event const& event) -> std::string {
+    if (event.type == core::EventType::key) {
+        return "key " + event_id(event);
+    }
+    return std::format(
+        "mouse {} {}:{}", event_id(event), event.mouse.position.line, event.mouse.position.column
     );
 }
 
@@ -245,17 +256,80 @@ int main() {
         std::fflush(stdout);
     };
 
-    repaint({}); // first full frame
+    // ---------------------------------------------------------------
+    // Event dispatch: bindings map from event id to handler. What the
+    // handlers mutate lives above them; `damage`/`full_repaint` are reset
+    // each iteration and consumed by repaint().
+    // ---------------------------------------------------------------
 
     bool running { true };
+    std::vector<Rectangle> damage;
+    bool full_repaint { false };
+
+    auto const mark_focused = [&] {
+        if (auto const area { session.pane_area(session.focused_id()) }) {
+            damage.push_back(*area);
+        }
+    };
+
+    auto const move_focus = [&](core::Direction direction) {
+        mark_focused(); // old pane loses the focused border
+        session.move_focus(direction);
+        mark_focused(); // new pane gains it
+    };
+
+    std::function<void(core::Event const&)> const click = [&](core::Event const& event) {
+        Position const point { event.mouse.position };
+        if (auto const id { session.pane_at(point) }) {
+            mark_focused(); // old focus border
+            session.focus(*id);
+            if (auto* pane { session.pane(*id) }) {
+                if (auto const area { session.pane_area(*id) }) {
+                    pane->set_cursor(pane->position_from_screen(*area, point));
+                }
+            }
+            mark_focused(); // new focus border + cursor
+        }
+    };
+
+    std::unordered_map<std::string, std::function<void(core::Event const&)>> const bindings {
+        { "C-'w'", [&](auto const&) { // close Spice
+            running = false;
+        } },
+        { "C-'n'", [&](auto const&) { // open a new pane
+            auto buffer { session.create_buffer(
+                std::format("scratch-{}", ++scratch_count),
+                core::BufferCapability::editable
+            ) };
+            session.open_pane(core::PaneType::edit, std::move(buffer));
+            full_repaint = true;
+        } },
+        { "C-'x'", [&](auto const&) { // close the current pane
+            session.close_focused_pane();
+            if (session.pane_count() == 0) {
+                running = false; // all panes closed: the program ends
+            }
+            full_repaint = true;
+        } },
+        { "C-'f'", [&](auto const&) { session.float_focused(); full_repaint = true; } },
+        { "C-'d'", [&](auto const&) { session.dock_focused(); full_repaint = true; } },
+        { "C-up", [&](auto const&) { move_focus(core::Direction::up); } },
+        { "C-down", [&](auto const&) { move_focus(core::Direction::down); } },
+        { "C-left", [&](auto const&) { move_focus(core::Direction::left); } },
+        { "C-right", [&](auto const&) { move_focus(core::Direction::right); } },
+        { "press left", click },
+        { "C-press left", click },
+    };
+
+    repaint({}); // first full frame
+
     while (running) {
         auto const event { reader.poll(100) };
         if (!event) {
             continue;
         }
-
-        std::vector<Rectangle> damage;
-        bool full_repaint { false };
+        damage.clear();
+        full_repaint = false;
 
         // every event lands in the log buffer, pane or no pane
         log_buffer->append("\n" + describe(*event));
@@ -266,67 +340,15 @@ int main() {
             }
         }
 
-        auto const focused_area = [&]() {
-            if (auto const area { session.pane_area(session.focused_id()) }) {
-                damage.push_back(*area);
-            }
-        };
-
-        if (event->type == core::EventType::key) {
-            auto const& key { event->key };
-            if (key.mods.ctrl && key.key == core::Key::character) {
-                if (key.text == "w") { // close Spice
-                    running = false;
-                } else if (key.text == "n") { // open a new pane
-                    auto buffer { session.create_buffer(
-                        std::format("scratch-{}", ++scratch_count),
-                        core::BufferCapability::editable
-                    ) };
-                    session.open_pane(core::PaneType::edit, std::move(buffer));
-                    full_repaint = true;
-                } else if (key.text == "x") { // close the current pane
-                    session.close_focused_pane();
-                    if (session.pane_count() == 0) {
-                        running = false; // all panes closed: the program ends
-                    }
-                    full_repaint = true;
-                } else if (key.text == "f") { // float
-                    session.float_focused();
-                    full_repaint = true;
-                } else if (key.text == "d") { // dock
-                    session.dock_focused();
-                    full_repaint = true;
+        if (auto const bound { bindings.find(event_id(*event)) }; bound != bindings.end()) {
+            bound->second(*event);
+        } else if (event->type == core::EventType::key
+                   && !event->key.mods.ctrl && !event->key.mods.alt) {
+            // unbound plain keys go to the focused pane as editing
+            if (auto* pane { session.focused_pane() }) {
+                if (edit_pane(*pane, event->key)) {
+                    mark_focused();
                 }
-            } else if (key.mods.ctrl
-                       && (key.key == core::Key::up || key.key == core::Key::down
-                           || key.key == core::Key::left || key.key == core::Key::right)) {
-                focused_area(); // old pane loses the focused border
-                switch (key.key) {
-                    case core::Key::up: session.move_focus(core::Direction::up); break;
-                    case core::Key::down: session.move_focus(core::Direction::down); break;
-                    case core::Key::left: session.move_focus(core::Direction::left); break;
-                    default: session.move_focus(core::Direction::right); break;
-                }
-                focused_area(); // new pane gains it
-            } else if (!key.mods.ctrl && !key.mods.alt) {
-                if (auto* pane { session.focused_pane() }) {
-                    if (edit_pane(*pane, key)) {
-                        focused_area();
-                    }
-                }
-            }
-        } else if (event->mouse.action == core::MouseAction::press
-                   && event->mouse.button == core::MouseButton::left) {
-            Position const point { event->mouse.position };
-            if (auto const id { session.pane_at(point) }) {
-                focused_area(); // old focus border
-                session.focus(*id);
-                if (auto* pane { session.pane(*id) }) {
-                    if (auto const area { session.pane_area(*id) }) {
-                        pane->set_cursor(pane->position_from_screen(*area, point));
-                    }
-                }
-                focused_area(); // new focus border + cursor
             }
         }
 
