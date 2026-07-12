@@ -11,16 +11,7 @@ namespace {
 
 using spice::core::Color;
 using spice::core::utf8_length;
-
-//! Byte offset of the start of the `column`-th UTF-8 character in `line`.
-//! Returns line.size() if `column` runs past the last character in the line.
-auto column_offset(std::string const& line, uint32_t column) -> size_t {
-    size_t offset { 0 };
-    for (uint32_t i { 0 }; i < column && offset < line.size(); ++i) {
-        offset += utf8_length(line[offset]);
-    }
-    return offset;
-}
+using spice::core::utf8_offset;
 
 auto in_bounds(spice::core::Position position, uint32_t width, uint32_t height) -> bool {
     return position.line < height && position.column < width;
@@ -74,7 +65,7 @@ auto Grid::char_at(Position position) -> std::string_view {
     }
 
     std::string const& line { _text[position.line] };
-    size_t const offset { column_offset(line, position.column) };
+    size_t const offset { utf8_offset(line, position.column) };
     if (offset >= line.size()) {
         return {};
     }
@@ -88,7 +79,7 @@ auto Grid::set_text(Position position, std::string_view text) -> bool {
     }
 
     std::string& line { _text[position.line] };
-    size_t const offset { column_offset(line, position.column) };
+    size_t const offset { utf8_offset(line, position.column) };
     if (offset >= line.size()) {
         return false;
     }
@@ -184,7 +175,7 @@ auto Grid::render_rect(TermInfo& terminfo, Position position, Rectangle rect) ->
         // walk the line's utf-8 incrementally rather than through char_at,
         // which would re-scan the line from the start for every cell
         std::string const& line { _text[row] };
-        size_t offset { column_offset(line, first_column) };
+        size_t offset { utf8_offset(line, first_column) };
 
         for (uint32_t column { first_column }; column < end_column && offset < line.size(); ++column) {
             if (position.column + column >= term_width) {

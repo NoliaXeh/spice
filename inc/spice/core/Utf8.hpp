@@ -2,6 +2,7 @@
 #define SPICE_CORE_UTF8_H
 
 #include <cstddef>
+#include <string_view>
 
 namespace spice::core {
 
@@ -15,6 +16,25 @@ constexpr auto utf8_length(char lead) -> std::size_t {
     if ((byte & 0xF0) == 0xE0) return 3;
     if ((byte & 0xF8) == 0xF0) return 4;
     return 1;
+}
+
+//! Byte offset of the start of the `index`-th UTF-8 character in `text`.
+//! Returns text.size() if `index` runs past the last character.
+constexpr auto utf8_offset(std::string_view text, std::size_t index) -> std::size_t {
+    std::size_t offset { 0 };
+    for (std::size_t i { 0 }; i < index && offset < text.size(); ++i) {
+        offset += utf8_length(text[offset]);
+    }
+    return offset < text.size() ? offset : text.size();
+}
+
+//! Number of UTF-8 characters in `text`.
+constexpr auto utf8_count(std::string_view text) -> std::size_t {
+    std::size_t count { 0 };
+    for (std::size_t offset { 0 }; offset < text.size(); offset += utf8_length(text[offset])) {
+        ++count;
+    }
+    return count;
 }
 
 }
