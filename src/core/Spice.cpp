@@ -12,6 +12,7 @@ constexpr std::string_view welcome_text {
     "  ctrl-space / ctrl-p  open the command palette\n"
     "  drag a pane border  move it (drop on a tile to swap)\n"
     "\n"
+    "  ctrl-z / ctrl-y  undo / redo\n"
     "  ctrl-n  open a new pane\n"
     "  ctrl-x  close the current pane\n"
     "  ctrl-arrows  move focus\n"

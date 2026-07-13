@@ -373,6 +373,20 @@ int main() {
         char const* shell { std::getenv("SHELL") };
         session.open_pty_pane({ shell != nullptr ? shell : "/bin/sh" });
     } });
+    registry.add({ "buffer.undo", "Undo", [&] {
+        if (auto* pane { session.focused_pane() }) {
+            if (auto const position { pane->buffer()->undo() }) {
+                pane->set_cursor(*position);
+            }
+        }
+    } });
+    registry.add({ "buffer.redo", "Redo", [&] {
+        if (auto* pane { session.focused_pane() }) {
+            if (auto const position { pane->buffer()->redo() }) {
+                pane->set_cursor(*position);
+            }
+        }
+    } });
 
     // ---------------------------------------------------------------
     // Rendering
@@ -514,6 +528,8 @@ int main() {
         { "C-'x'", [&](auto const&) { run_command("pane.close"); } },
         { "C-'f'", [&](auto const&) { run_command("pane.float"); } },
         { "C-'d'", [&](auto const&) { run_command("pane.dock"); } },
+        { "C-'z'", [&](auto const&) { registry.run("buffer.undo"); mark_focused(); } },
+        { "C-'y'", [&](auto const&) { registry.run("buffer.redo"); mark_focused(); } },
         { "C-up", [&](auto const&) { move_focus(core::Direction::up); } },
         { "C-down", [&](auto const&) { move_focus(core::Direction::down); } },
         { "C-left", [&](auto const&) { move_focus(core::Direction::left); } },
