@@ -9,6 +9,8 @@ constexpr std::string_view welcome_text {
     "\n"
     "The buffer manager made to match any taste.\n"
     "\n"
+    "  ctrl-space / ctrl-p  open the command palette\n"
+    "\n"
     "  ctrl-n  open a new pane\n"
     "  ctrl-x  close the current pane\n"
     "  ctrl-arrows  move focus\n"

@@ -396,6 +396,7 @@ int main() {
 
     std::unordered_map<std::string, std::function<void(core::Event const&)>> const bindings {
         { std::string(master_key), open_palette },
+        { "C-'p'", open_palette }, // some terminals swallow ctrl-space
         { "C-'w'", [&](auto const&) { run_command("session.close"); } },
         { "C-'n'", [&](auto const&) { run_command("buffer.new"); } },
         { "C-'x'", [&](auto const&) { run_command("pane.close"); } },
