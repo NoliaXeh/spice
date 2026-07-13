@@ -68,6 +68,7 @@ Escape sequences are hardcoded to the de-facto xterm standard.
 | `ioctl(TIOCGWINSZ)` | `<sys/ioctl.h>` | TermInfo | terminal width/height in cells; returns 0×0 when stdout is not a tty |
 | `getpid()` | `<unistd.h>` | TermInfo | own pid |
 | `isatty()`, `tcgetattr()`, `tcsetattr()`, `cfmakeraw()` | `<termios.h>`, `<unistd.h>` | EventReader | switch stdin to raw mode (no echo, no line buffering, no signal keys), restore on destruction |
+| `sigaction(SIGWINCH)` | `<csignal>` | EventReader | terminal resize notification; the handler only sets a `sig_atomic_t` flag, the poll loop turns it into an `EventType::resize` (no `SA_RESTART`, so `poll` wakes with `EINTR`) |
 | `poll()` | `<poll.h>` | EventReader | wait for stdin bytes with a timeout |
 | `read()`, `write()` | `<unistd.h>` | EventReader | raw byte input; unbuffered writes of the mouse on/off sequences |
 | `fwrite()`/stdio | `<cstdio>` | Grid | one buffered write per rendered frame/rect |
@@ -99,7 +100,8 @@ Escape sequences are hardcoded to the de-facto xterm standard.
 
 `Event` (Event.hpp) is a tagged struct: `EventType type` says whether `key` (a `KeyEvent`: `Key`
 enum + `Modifiers` + UTF-8 `text`) or `mouse` (a `MouseEvent`: `MouseAction` + `MouseButton` +
-`Modifiers` + `Position`) is meaningful. Everything is enums and plain data - no virtuals.
+`Modifiers` + `Position`) is meaningful - or `resize`, which carries nothing (the new size is
+re-queried from TermInfo). Everything is enums and plain data - no virtuals.
 
 `EventParser` (EventParser.cpp) is an incremental state machine
 (`ground / escape / csi / ss3 / utf8`) fed raw bytes via `feed()`. Sequences split across
@@ -145,8 +147,9 @@ border_focused, error, warning, info) to a `Color`, `std::array`-backed. Drawing
 hardcodes a color; it asks the theme, so a palette change recolors everything.
 
 `TermInfo` (TermInfo.cpp) is the trivial "ask the kernel" class: width/height via
-`TIOCGWINSZ` (0×0 without a tty), pid via `getpid()`. It is queried at render time, not
-cached, so a resize is picked up by the next render (there is no SIGWINCH handling yet).
+`TIOCGWINSZ` (0×0 without a tty), pid via `getpid()`. It is queried, never cached: when a
+`resize` event arrives (SIGWINCH via EventReader), main re-queries it, rebuilds the Grid at
+the new size, re-lays-out the session and repaints a full frame.
 
 ## The pane system
 
