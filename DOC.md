@@ -182,9 +182,11 @@ the README prescribes:
   two; `remove` grafts the sibling into the parent's place.
 - the **float list**: `(pane, Rectangle)` pairs; z-order is list rank, last on top.
 
-On top of those: `pane_at` (hit test, topmost float first, then tiles) and `neighbor`
+On top of those: `pane_at` (hit test, topmost float first, then tiles), `neighbor`
 (directional focus: probe one cell beyond the pane's edge, level with its center, and see
-which tile is there).
+which tile is there), `move_float` (reposition a float), and `swap` (exchange the places of
+any two panes - two tiles, two floats, or a tile and a float, which trades tiled for
+floating).
 
 **`Spice`** (Spice.cpp) - the session tying it together: owns the buffers
 (`vector<shared_ptr<Buffer>>`), the panes (`map<id, Pane>`), the `Layout`, and the focus.
@@ -233,6 +235,12 @@ interactive handlers that also track damage. Unbound plain keys fall through to
 `edit_pane()`, which applies characters/enter/backspace/delete/arrows to the focused pane's
 buffer through the capability-checked `Buffer` API. The same `event_id` feeds `describe()`,
 so the on-screen event log and the dispatcher share one naming scheme.
+
+Panes are mouse-movable by their border: a press on a border cell (inside the pane's area but
+outside its content area) starts a drag. While dragging, a floating pane follows the pointer
+(`move_float`, clamped to the screen, damage-repainted); a docked pane shows no motion but
+swaps places with whatever pane it is dropped on (`swap_panes`). A press on content is a
+normal click: focus + cursor placement.
 
 Repaint per event: handlers accumulate damage (`vector<Rectangle>`; layout changes request a
 full frame), then one `repaint()` clears the grid, has the session redraw every pane into it,
