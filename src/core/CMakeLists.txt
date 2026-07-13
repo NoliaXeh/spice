@@ -9,6 +9,7 @@ add_library(core STATIC
     Layout.cpp
     Pane.cpp
     Command.cpp
+    Palette.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 
