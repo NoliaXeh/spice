@@ -279,11 +279,20 @@ int main() {
     registry.add({ "session.welcome", "Open Welcome Pane", [&] {
         session.open_welcome_pane();
     } });
-    registry.add({ "buffer.new", "New buffer", [&] {
-        auto buffer { session.create_buffer(
+    auto const make_scratch = [&] {
+        return session.create_buffer(
             std::format("scratch-{}", ++scratch_count), core::BufferCapability::editable
-        ) };
-        session.open_pane(core::PaneType::edit, std::move(buffer));
+        );
+    };
+
+    registry.add({ "buffer.new", "New buffer", [&] {
+        session.open_pane(core::PaneType::edit, make_scratch());
+    } });
+    registry.add({ "pane.split_vertical", "Split vertical (side by side)", [&] {
+        session.open_pane(core::PaneType::edit, make_scratch(), true);
+    } });
+    registry.add({ "pane.split_horizontal", "Split horizontal (stacked)", [&] {
+        session.open_pane(core::PaneType::edit, make_scratch(), false);
     } });
     registry.add({ "buffer.list", "List buffers", [&] {
         std::string content { "buffers:" };
