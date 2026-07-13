@@ -117,6 +117,38 @@ TEST_CASE("core::Layout::move_float() repositions a floating pane") {
     CHECK_FALSE(layout.move_float(1, { { 0, 0, 0 }, 5, 5 })); // tiled: refused
 }
 
+TEST_CASE("core::Layout::swap() exchanges two tiles") {
+    Layout layout;
+    layout.insert(1, 0, true);
+    layout.insert(2, 1, true);
+    auto const before { layout.tiles(screen) };
+
+    CHECK(layout.swap(1, 2));
+    auto const after { layout.tiles(screen) };
+    CHECK_EQ(after[0].first, 2u);
+    CHECK_EQ(after[0].second, before[0].second); // rects unchanged
+    CHECK_EQ(after[1].first, 1u);
+}
+
+TEST_CASE("core::Layout::swap() trades a tile for a float") {
+    Layout layout;
+    layout.insert(1, 0, true);
+    layout.float_pane(2, { { 3, 3, 0 }, 10, 5 });
+
+    CHECK(layout.swap(1, 2));
+    CHECK(layout.is_floating(1));
+    CHECK_FALSE(layout.is_floating(2));
+    CHECK_EQ(layout.tiles(screen)[0].first, 2u);
+    CHECK_EQ(layout.floats()[0].second, Rectangle { { 3, 3, 0 }, 10, 5 });
+}
+
+TEST_CASE("core::Layout::swap() rejects self and unknown panes") {
+    Layout layout;
+    layout.insert(1, 0, true);
+    CHECK_FALSE(layout.swap(1, 1));
+    CHECK_FALSE(layout.swap(1, 9));
+}
+
 TEST_CASE("core::Layout a floating pane can be removed") {
     Layout layout;
     layout.float_pane(7, { { 0, 0, 0 }, 5, 5 });

@@ -186,6 +186,17 @@ auto Spice::move_float(uint32_t id, Rectangle rect) -> bool {
     return _layout.move_float(id, rect);
 }
 
+auto Spice::is_floating(uint32_t id) const -> bool {
+    return _layout.is_floating(id);
+}
+
+auto Spice::swap_panes(uint32_t a, uint32_t b) -> bool {
+    if (!_panes.contains(a) || !_panes.contains(b)) {
+        return false;
+    }
+    return _layout.swap(a, b);
+}
+
 auto Spice::pane_at(Position point) const -> std::optional<uint32_t> {
     return _layout.pane_at(_screen, point);
 }

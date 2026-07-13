@@ -1,6 +1,7 @@
 #include "spice/core/Layout.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace spice::core {
 
@@ -202,6 +203,28 @@ auto Layout::move_float(uint32_t pane, Rectangle rect) -> bool {
         }
     }
     return false;
+}
+
+auto Layout::swap(uint32_t a, uint32_t b) -> bool {
+    auto const slot_of = [this](uint32_t pane) -> uint32_t* {
+        for (Float& f : _floats) {
+            if (f.pane == pane) {
+                return &f.pane;
+            }
+        }
+        if (auto* leaf { find_leaf(_root, pane) }) {
+            return &(*leaf)->pane;
+        }
+        return nullptr;
+    };
+
+    uint32_t* slot_a { slot_of(a) };
+    uint32_t* slot_b { slot_of(b) };
+    if (a == b || slot_a == nullptr || slot_b == nullptr) {
+        return false;
+    }
+    std::swap(*slot_a, *slot_b);
+    return true;
 }
 
 auto Layout::tiles(Rectangle screen) const -> std::vector<std::pair<uint32_t, Rectangle>> {

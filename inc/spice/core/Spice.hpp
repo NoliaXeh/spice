@@ -69,6 +69,9 @@ public:
     auto dock_focused() -> void;
     //! Moves/resizes a floating pane; false if it is not floating.
     auto move_float(uint32_t id, Rectangle rect) -> bool;
+    auto is_floating(uint32_t id) const -> bool;
+    //! Exchanges the places of two panes (tile/tile, float/float or mixed).
+    auto swap_panes(uint32_t a, uint32_t b) -> bool;
 
     auto pane_at(Position point) const -> std::optional<uint32_t>;
     //! The rectangle a pane currently occupies (tile or float).

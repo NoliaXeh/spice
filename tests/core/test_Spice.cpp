@@ -135,6 +135,32 @@ TEST_CASE("core::Spice::move_float() moves a floating pane") {
     CHECK_FALSE(session.move_float(9999, { { 0, 0, 0 }, 5, 5 }));
 }
 
+TEST_CASE("core::Spice::swap_panes() exchanges places and keeps focus by id") {
+    auto session { make_session() };
+    uint32_t const first { session.open_welcome_pane() };
+    auto buffer { session.create_buffer("s", core::BufferCapability::editable) };
+    uint32_t const second { session.open_pane(core::PaneType::edit, buffer) };
+    auto const area_first { *session.pane_area(first) };
+    auto const area_second { *session.pane_area(second) };
+
+    CHECK(session.swap_panes(first, second));
+    CHECK_EQ(session.pane_area(first), area_second);
+    CHECK_EQ(session.pane_area(second), area_first);
+    CHECK_EQ(session.focused_id(), second); // focus follows the pane, not the spot
+    CHECK_FALSE(session.swap_panes(first, 9999));
+}
+
+TEST_CASE("core::Spice::is_floating()") {
+    auto session { make_session() };
+    uint32_t const tiled { session.open_welcome_pane() };
+    auto buffer { session.create_buffer("f", core::BufferCapability::editable) };
+    uint32_t const floating {
+        session.open_float(core::PaneType::grid, buffer, { { 2, 2, 0 }, 10, 5 })
+    };
+    CHECK(session.is_floating(floating));
+    CHECK_FALSE(session.is_floating(tiled));
+}
+
 TEST_CASE("core::Spice::pane_at() prefers floats over tiles") {
     auto session { make_session() };
     uint32_t const tiled { session.open_welcome_pane() };

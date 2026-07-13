@@ -51,6 +51,10 @@ public:
     //! Moves/resizes a floating pane; false if the pane is not floating.
     auto move_float(uint32_t pane, Rectangle rect) -> bool;
 
+    //! Exchanges the places of two panes - tile with tile, float with
+    //! float, or tile with float (which trades tiled for floating).
+    auto swap(uint32_t a, uint32_t b) -> bool;
+
     //! The tiled panes and their rectangles for a screen of `screen` size.
     //! Splits partition their rectangle exactly, so tiles cover the screen.
     auto tiles(Rectangle screen) const -> std::vector<std::pair<uint32_t, Rectangle>>;
