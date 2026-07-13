@@ -161,6 +161,22 @@ TEST_CASE("core::Spice::is_floating()") {
     CHECK_FALSE(session.is_floating(tiled));
 }
 
+TEST_CASE("core::Spice focusing a float raises it above the other floats") {
+    auto session { make_session() };
+    session.open_welcome_pane();
+    auto buffer { session.create_buffer("f", core::BufferCapability::editable) };
+    uint32_t const below {
+        session.open_float(core::PaneType::grid, buffer, { { 3, 3, 0 }, 10, 5 })
+    };
+    uint32_t const above {
+        session.open_float(core::PaneType::grid, buffer, { { 3, 3, 0 }, 10, 5 })
+    };
+    CHECK_EQ(session.pane_at({ 4, 4, 0 }), above); // newest float on top
+
+    session.focus(below);
+    CHECK_EQ(session.pane_at({ 4, 4, 0 }), below); // raised by focus
+}
+
 TEST_CASE("core::Spice::pane_at() prefers floats over tiles") {
     auto session { make_session() };
     uint32_t const tiled { session.open_welcome_pane() };

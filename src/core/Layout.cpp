@@ -205,6 +205,17 @@ auto Layout::move_float(uint32_t pane, Rectangle rect) -> bool {
     return false;
 }
 
+auto Layout::raise_float(uint32_t pane) -> bool {
+    auto const found {
+        std::ranges::find_if(_floats, [&](Float const& f) { return f.pane == pane; })
+    };
+    if (found == _floats.end()) {
+        return false;
+    }
+    std::rotate(found, found + 1, _floats.end()); // to the back: topmost
+    return true;
+}
+
 auto Layout::swap(uint32_t a, uint32_t b) -> bool {
     auto const slot_of = [this](uint32_t pane) -> uint32_t* {
         for (Float& f : _floats) {

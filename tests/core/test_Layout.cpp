@@ -117,6 +117,20 @@ TEST_CASE("core::Layout::move_float() repositions a floating pane") {
     CHECK_FALSE(layout.move_float(1, { { 0, 0, 0 }, 5, 5 })); // tiled: refused
 }
 
+TEST_CASE("core::Layout::raise_float() puts a float on top") {
+    Layout layout;
+    layout.insert(1, 0, true);
+    layout.float_pane(2, { { 0, 0, 0 }, 10, 10 });
+    layout.float_pane(3, { { 0, 0, 0 }, 10, 10 }); // same spot, on top of 2
+
+    CHECK(layout.raise_float(2));
+    CHECK_EQ(layout.floats().back().first, 2u);
+    CHECK_EQ(layout.pane_at(screen, { 1, 1, 0 }), 2u); // hit test sees 2 now
+
+    CHECK_FALSE(layout.raise_float(1)); // tiled
+    CHECK_FALSE(layout.raise_float(9)); // unknown
+}
+
 TEST_CASE("core::Layout::swap() exchanges two tiles") {
     Layout layout;
     layout.insert(1, 0, true);

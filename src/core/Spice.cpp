@@ -146,6 +146,7 @@ auto Spice::focused_pane() -> Pane* {
 auto Spice::focus(uint32_t id) -> void {
     if (_panes.contains(id)) {
         _focused = id;
+        _layout.raise_float(id); // a focused float goes above all other floats
     }
 }
 

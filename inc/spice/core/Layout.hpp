@@ -51,6 +51,9 @@ public:
     //! Moves/resizes a floating pane; false if the pane is not floating.
     auto move_float(uint32_t pane, Rectangle rect) -> bool;
 
+    //! Puts a floating pane above all other floats; false if not floating.
+    auto raise_float(uint32_t pane) -> bool;
+
     //! Exchanges the places of two panes - tile with tile, float with
     //! float, or tile with float (which trades tiled for floating).
     auto swap(uint32_t a, uint32_t b) -> bool;

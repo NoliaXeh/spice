@@ -184,9 +184,10 @@ the README prescribes:
 
 On top of those: `pane_at` (hit test, topmost float first, then tiles), `neighbor`
 (directional focus: probe one cell beyond the pane's edge, level with its center, and see
-which tile is there), `move_float` (reposition a float), and `swap` (exchange the places of
-any two panes - two tiles, two floats, or a tile and a float, which trades tiled for
-floating).
+which tile is there), `move_float` (reposition a float), `raise_float` (to the top of the
+z-order - `Spice::focus` calls it, so a focused float always sits above the other floats),
+and `swap` (exchange the places of any two panes - two tiles, two floats, or a tile and a
+float, which trades tiled for floating).
 
 **`Spice`** (Spice.cpp) - the session tying it together: owns the buffers
 (`vector<shared_ptr<Buffer>>`), the panes (`map<id, Pane>`), the `Layout`, and the focus.
