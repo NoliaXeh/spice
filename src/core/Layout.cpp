@@ -194,6 +194,16 @@ auto Layout::dock_pane(uint32_t pane, uint32_t at, bool horizontal) -> bool {
     return insert(pane, at, horizontal);
 }
 
+auto Layout::move_float(uint32_t pane, Rectangle rect) -> bool {
+    for (Float& f : _floats) {
+        if (f.pane == pane) {
+            f.rect = rect;
+            return true;
+        }
+    }
+    return false;
+}
+
 auto Layout::tiles(Rectangle screen) const -> std::vector<std::pair<uint32_t, Rectangle>> {
     std::vector<std::pair<uint32_t, Rectangle>> out;
     collect_tiles(_root.get(), screen, out);

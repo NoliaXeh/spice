@@ -48,6 +48,9 @@ public:
     //! `at` (like insert). `at` is ignored when the tree is empty.
     auto dock_pane(uint32_t pane, uint32_t at, bool horizontal) -> bool;
 
+    //! Moves/resizes a floating pane; false if the pane is not floating.
+    auto move_float(uint32_t pane, Rectangle rect) -> bool;
+
     //! The tiled panes and their rectangles for a screen of `screen` size.
     //! Splits partition their rectangle exactly, so tiles cover the screen.
     auto tiles(Rectangle screen) const -> std::vector<std::pair<uint32_t, Rectangle>>;

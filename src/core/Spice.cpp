@@ -178,6 +178,10 @@ auto Spice::dock_focused() -> void {
     _layout.dock_pane(_focused, at, horizontal);
 }
 
+auto Spice::move_float(uint32_t id, Rectangle rect) -> bool {
+    return _layout.move_float(id, rect);
+}
+
 auto Spice::pane_at(Position point) const -> std::optional<uint32_t> {
     return _layout.pane_at(_screen, point);
 }

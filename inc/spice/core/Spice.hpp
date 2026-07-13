@@ -62,6 +62,8 @@ public:
     auto float_focused() -> void;
     //! Docks the focused floating pane back into the tree.
     auto dock_focused() -> void;
+    //! Moves/resizes a floating pane; false if it is not floating.
+    auto move_float(uint32_t id, Rectangle rect) -> bool;
 
     auto pane_at(Position point) const -> std::optional<uint32_t>;
     //! The rectangle a pane currently occupies (tile or float).

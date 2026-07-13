@@ -107,6 +107,16 @@ TEST_CASE("core::Layout float and dock round-trip") {
     CHECK_EQ(layout.tiles(screen).size(), 2u);
 }
 
+TEST_CASE("core::Layout::move_float() repositions a floating pane") {
+    Layout layout;
+    layout.insert(1, 0, true);
+    layout.float_pane(2, { { 2, 2, 0 }, 10, 5 });
+
+    CHECK(layout.move_float(2, { { 8, 8, 0 }, 12, 6 }));
+    CHECK_EQ(layout.floats().back().second, Rectangle { { 8, 8, 0 }, 12, 6 });
+    CHECK_FALSE(layout.move_float(1, { { 0, 0, 0 }, 5, 5 })); // tiled: refused
+}
+
 TEST_CASE("core::Layout a floating pane can be removed") {
     Layout layout;
     layout.float_pane(7, { { 0, 0, 0 }, 5, 5 });

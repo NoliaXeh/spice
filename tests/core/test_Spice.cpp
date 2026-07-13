@@ -107,6 +107,18 @@ TEST_CASE("core::Spice float and dock round-trip") {
     CHECK_EQ(session.pane_count(), 2u);
 }
 
+TEST_CASE("core::Spice::move_float() moves a floating pane") {
+    auto session { make_session() };
+    session.open_welcome_pane();
+    auto buffer { session.create_buffer("f", core::BufferCapability::editable) };
+    uint32_t const floating {
+        session.open_float(core::PaneType::grid, buffer, { { 5, 5, 0 }, 20, 10 })
+    };
+    CHECK(session.move_float(floating, { { 1, 1, 0 }, 30, 8 }));
+    CHECK_EQ(session.pane_area(floating), core::Rectangle { { 1, 1, 0 }, 30, 8 });
+    CHECK_FALSE(session.move_float(9999, { { 0, 0, 0 }, 5, 5 }));
+}
+
 TEST_CASE("core::Spice::pane_at() prefers floats over tiles") {
     auto session { make_session() };
     uint32_t const tiled { session.open_welcome_pane() };
