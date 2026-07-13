@@ -23,8 +23,10 @@ There is no inheritance anywhere - the "hierarchy" is composition. Arrows mean "
    EventParser     ├─ Buffer      ├─ Color              Palette ────┘
         │          ├─ Pane ───────┤  (+ StyleFlags)     (draws into Grid,
         ▼          │   (draws into Grid)                 picks command names)
-      Event        └─ Layout
-   (Key, Mouse*)       (split tree + floats)
+      Event        ├─ Layout
+   (Key, Mouse*)   │   (split tree + floats)
+                   └─ Pty (+ PtyFilter)
+                       (child process on a pseudo-terminal)
 
    shared value types: Position, Rectangle, Color, Utf8 helpers
 ```
@@ -72,6 +74,9 @@ Escape sequences are hardcoded to the de-facto xterm standard.
 | `poll()` | `<poll.h>` | EventReader | wait for stdin bytes with a timeout |
 | `read()`, `write()` | `<unistd.h>` | EventReader | raw byte input; unbuffered writes of the mouse on/off sequences |
 | `fwrite()`/stdio | `<cstdio>` | Grid | one buffered write per rendered frame/rect |
+| `posix_openpt()`, `grantpt()`, `unlockpt()`, `ptsname()` | `<cstdlib>`, `<fcntl.h>` | Pty | allocate the pseudo-terminal pair for a PTY pane |
+| `fork()`, `setsid()`, `dup2()`, `execvp()` | `<unistd.h>` | Pty | start the child as a session leader with the slave as its controlling tty and stdio |
+| `kill()`, `waitpid()` | `<csignal>`, `<sys/wait.h>` | Pty | SIGHUP+SIGKILL on terminate and reaping; the kernel HUPs the foreground job when the leader dies |
 
 ### Escape sequences emitted
 
@@ -164,8 +169,7 @@ never empty (always ≥ 1 line). Its `BufferCapability` gates mutation:
 - `append_only`: those three all return false; only `append` (which splits on `\n`) grows the
   buffer. This is the PTY-scrollback model.
 
-**`Pane`** (Pane.cpp) - a view: `PaneType` (edit / grid / pty - pty is declared but has no
-process plumbing yet), a `shared_ptr<Buffer>` (shared: two panes can view one buffer; a
+**`Pane`** (Pane.cpp) - a view: `PaneType` (edit / grid / pty), a `shared_ptr<Buffer>` (shared: two panes can view one buffer; a
 buffer with no pane just lives on), a cursor and a scroll offset - the only view-specific
 state. `draw(grid, area, focused, theme)` paints a box-drawing border (`┌─┐│└┘`) with the
 buffer's name as title, then the visible slice of the buffer. Edit panes auto-scroll to keep
@@ -188,6 +192,17 @@ which tile is there), `move_float` (reposition a float), `raise_float` (to the t
 z-order - `Spice::focus` calls it, so a focused float always sits above the other floats),
 and `swap` (exchange the places of any two panes - two tiles, two floats, or a tile and a
 float, which trades tiled for floating).
+
+**`Pty` / `PtyFilter`** (Pty.cpp) - the process side of PTY panes. `Pty` runs a child on a
+pseudo-terminal (see the POSIX table above), master side non-blocking: `read_output()` drains,
+`write_input()` forwards, `resize()` re-sizes (the child gets SIGWINCH), `terminate()`
+SIGHUPs/SIGKILLs and reaps. `PtyFilter` reduces the child's byte stream to appendable
+scrollback: escape sequences (CSI/OSC/ESC-prefixed) stripped, control bytes dropped, tabs to
+spaces - deliberately *not* terminal emulation; full-screen programs will look wrong until a
+real emulator lands. The session owns a `Pty`+`PtyFilter` per PTY pane: `open_pty_pane(argv)`
+spawns sized to the pane's content, `pump_ptys()` (called every main-loop turn) appends
+filtered output to the append-only scrollback buffer and reports which panes changed, and
+closing the pane kills the process while the scrollback buffer survives.
 
 **`Spice`** (Spice.cpp) - the session tying it together: owns the buffers
 (`vector<shared_ptr<Buffer>>`), the panes (`map<id, Pane>`), the `Layout`, and the focus.
@@ -236,6 +251,11 @@ interactive handlers that also track damage. Unbound plain keys fall through to
 `edit_pane()`, which applies characters/enter/backspace/delete/arrows to the focused pane's
 buffer through the capability-checked `Buffer` API. The same `event_id` feeds `describe()`,
 so the on-screen event log and the dispatcher share one naming scheme.
+
+When the focused pane is a PTY pane, unbound keys - modifiers included, so ctrl-c reaches the
+child - are translated back into terminal bytes (`key_to_bytes`) and written to its pty; the
+output comes back through `pump_ptys()`, which runs every loop turn (event or 100 ms timeout)
+so shell output appears without user input.
 
 Panes are mouse-movable by their border: a press on a border cell (inside the pane's area but
 outside its content area) starts a drag. While dragging, a floating pane follows the pointer
