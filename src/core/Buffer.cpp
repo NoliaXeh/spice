@@ -18,6 +18,7 @@ Buffer::Buffer(std::string&& name, BufferCapability capability, std::string_view
     , _capability { capability }
 {
     append(content);
+    _dirty = false; // initial content is a starting point, not an edit
 }
 
 auto Buffer::name() const -> std::string const& {
@@ -26,6 +27,22 @@ auto Buffer::name() const -> std::string const& {
 
 auto Buffer::capability() const -> BufferCapability {
     return _capability;
+}
+
+auto Buffer::path() const -> std::string const& {
+    return _path;
+}
+
+auto Buffer::set_path(std::string path) -> void {
+    _path = std::move(path);
+}
+
+auto Buffer::dirty() const -> bool {
+    return _dirty;
+}
+
+auto Buffer::mark_saved() -> void {
+    _dirty = false;
 }
 
 auto Buffer::line_count() const -> uint32_t {
@@ -123,6 +140,9 @@ auto Buffer::split_line(Position position) -> bool {
 }
 
 auto Buffer::append(std::string_view text) -> void {
+    if (!text.empty()) {
+        _dirty = true;
+    }
     for (char const byte : text) {
         if (byte == '\n') {
             _lines.emplace_back();
@@ -137,6 +157,7 @@ auto Buffer::append(std::string_view text) -> void {
 // ---------------------------------------------------------------
 
 auto Buffer::record(Edit&& edit) -> void {
+    _dirty = true;
     _redo.clear(); // editing forks history: the undone future is gone
 
     if (!_undo.empty()) { // coalesce runs at one spot into a single edit
@@ -219,6 +240,7 @@ auto Buffer::undo() -> std::optional<Position> {
     _undo.pop_back();
     Position const position { revert(edit) };
     _redo.push_back(std::move(edit));
+    _dirty = true;
     return position;
 }
 
@@ -230,6 +252,7 @@ auto Buffer::redo() -> std::optional<Position> {
     _redo.pop_back();
     Position const position { apply(edit) };
     _undo.push_back(std::move(edit));
+    _dirty = true;
     return position;
 }
 

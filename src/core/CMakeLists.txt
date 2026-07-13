@@ -11,6 +11,7 @@ add_library(core STATIC
     Command.cpp
     Palette.cpp
     Pty.cpp
+    FileIo.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 

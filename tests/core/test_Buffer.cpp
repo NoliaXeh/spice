@@ -81,6 +81,23 @@ TEST_CASE("core::Buffer::capability() reports the flag") {
     CHECK_EQ(log.capability(), BufferCapability::append_only);
 }
 
+TEST_CASE("core::Buffer tracks a path and dirtiness") {
+    Buffer buffer { "b", BufferCapability::editable, "content" };
+    CHECK_EQ(buffer.path(), "");
+    CHECK_FALSE(buffer.dirty()); // initial content is not an edit
+
+    buffer.set_path("/tmp/somewhere");
+    CHECK_EQ(buffer.path(), "/tmp/somewhere");
+
+    buffer.insert({ 0, 0, 0 }, "x");
+    CHECK(buffer.dirty());
+    buffer.mark_saved();
+    CHECK_FALSE(buffer.dirty());
+
+    buffer.undo(); // undoing is also a change relative to the saved state
+    CHECK(buffer.dirty());
+}
+
 TEST_CASE("core::Buffer::undo() reverses an insert") {
     Buffer buffer { "b", BufferCapability::editable, "hello" };
     buffer.insert({ 0, 2, 0 }, "X");

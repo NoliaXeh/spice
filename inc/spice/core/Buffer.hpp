@@ -31,6 +31,14 @@ public:
     auto name() const -> std::string const&;
     auto capability() const -> BufferCapability;
 
+    //! The file this buffer is tied to; empty for scratch/scrollback.
+    auto path() const -> std::string const&;
+    auto set_path(std::string path) -> void;
+
+    //! True when the content changed since creation or the last save.
+    auto dirty() const -> bool;
+    auto mark_saved() -> void;
+
     auto line_count() const -> uint32_t;
     //! Returns empty if out of bounds.
     auto line(uint32_t index) const -> std::string_view;
@@ -80,6 +88,8 @@ private:
 
     std::string _name;
     BufferCapability _capability;
+    std::string _path;
+    bool _dirty { false };
     std::vector<std::string> _lines { std::string() };
     std::vector<Edit> _undo;
     std::vector<Edit> _redo;

@@ -11,6 +11,7 @@ add_executable(core_test
     test_Command.cpp
     test_Palette.cpp
     test_Pty.cpp
+    test_FileIo.cpp
 )
 
 target_link_libraries(core_test PRIVATE core)
