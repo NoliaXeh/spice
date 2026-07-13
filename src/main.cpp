@@ -390,6 +390,16 @@ int main() {
         mark_focused(); // new pane gains it
     };
 
+    //! An in-progress mouse drag: a pane grabbed by its border. Floats
+    //! follow the pointer; docked panes swap with the tile they drop on.
+    struct Drag {
+        bool active { false };
+        uint32_t pane { 0 };
+        uint32_t grab_line { 0 };   //!< press offset inside the pane
+        uint32_t grab_column { 0 };
+    };
+    Drag drag;
+
     std::function<void(core::Event const&)> const click = [&](core::Event const& event) {
         Position const point { event.mouse.position };
         if (auto const id { session.pane_at(point) }) {
@@ -397,10 +407,54 @@ int main() {
             session.focus(*id);
             if (auto* pane { session.pane(*id) }) {
                 if (auto const area { session.pane_area(*id) }) {
-                    pane->set_cursor(pane->position_from_screen(*area, point));
+                    if (!core::Pane::content_area(*area).contains(point)) {
+                        // grabbed by the border: start dragging
+                        drag = Drag {
+                            true, *id,
+                            point.line - area->position.line,
+                            point.column - area->position.column,
+                        };
+                    } else {
+                        pane->set_cursor(pane->position_from_screen(*area, point));
+                    }
                 }
             }
             mark_focused(); // new focus border + cursor
+        }
+    };
+
+    auto const drag_update = [&](core::MouseEvent const& mouse) {
+        if (mouse.action == core::MouseAction::move && session.is_floating(drag.pane)) {
+            // a float follows the pointer, keeping the grab point under it
+            if (auto const area { session.pane_area(drag.pane) }) {
+                damage.push_back(*area); // reveal what it uncovers
+                long line { static_cast<long>(mouse.position.line) - drag.grab_line };
+                long column { static_cast<long>(mouse.position.column) - drag.grab_column };
+                long const max_line { static_cast<long>(screen.height) - 2 };
+                long const max_column { static_cast<long>(screen.width) - 2 };
+                if (line < 0) line = 0;
+                if (line > max_line) line = max_line;
+                if (column < 0) column = 0;
+                if (column > max_column) column = max_column;
+
+                Rectangle const moved {
+                    { static_cast<uint32_t>(line), static_cast<uint32_t>(column), 0 },
+                    area->width,
+                    area->height,
+                };
+                session.move_float(drag.pane, moved);
+                damage.push_back(moved);
+            }
+        } else if (mouse.action == core::MouseAction::release) {
+            if (!session.is_floating(drag.pane)) {
+                // a docked pane swaps with whatever it is dropped on
+                if (auto const target { session.pane_at(mouse.position) };
+                    target && *target != drag.pane) {
+                    session.swap_panes(drag.pane, *target);
+                    full_repaint = true;
+                }
+            }
+            drag.active = false;
         }
     };
 
@@ -478,6 +532,8 @@ int main() {
                     break;
                 }
             }
+        } else if (event->type == core::EventType::mouse && drag.active) {
+            drag_update(event->mouse); // takes every mouse event mid-drag
         } else if (auto const bound { bindings.find(event_id(*event)) };
                    bound != bindings.end()) {
             bound->second(*event);
