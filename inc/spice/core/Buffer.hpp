@@ -2,7 +2,9 @@
 #define SPICE_CORE_BUFFER_H
 
 #include "spice/core/Position.hpp"
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -49,12 +51,38 @@ public:
 
     //! Appends text at the end of the buffer; '\n' starts a new line.
     //! Supported by every capability - append-only means *only* this grows.
+    //! Appends are not undoable (they are content arriving, not edits).
     auto append(std::string_view text) -> void;
 
+    //! Undoes the most recent edit - a run of typing (or deleting) at one
+    //! spot counts as a single edit. Returns where the change happened, so
+    //! the caller can place its cursor; nothing when history is exhausted.
+    auto undo() -> std::optional<Position>;
+    //! Re-applies the last undone edit. Any new edit clears redo history.
+    auto redo() -> std::optional<Position>;
+
 private:
+    //! One invertible edit: what happened, where, and the text involved.
+    struct Edit {
+        enum class Kind : uint8_t { insert_text, erase_text, split, join };
+        Kind kind;
+        Position position;
+        std::string text;
+    };
+
+    auto raw_insert(Position position, std::string_view text) -> void;
+    auto raw_erase(Position position, std::size_t bytes) -> void;
+    auto raw_split(Position position) -> void;
+    auto raw_join(uint32_t line) -> void;
+    auto apply(Edit const& edit) -> Position;
+    auto revert(Edit const& edit) -> Position;
+    auto record(Edit&& edit) -> void;
+
     std::string _name;
     BufferCapability _capability;
     std::vector<std::string> _lines { std::string() };
+    std::vector<Edit> _undo;
+    std::vector<Edit> _redo;
 };
 
 }

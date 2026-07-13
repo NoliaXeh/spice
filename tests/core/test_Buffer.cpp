@@ -80,3 +80,131 @@ TEST_CASE("core::Buffer::capability() reports the flag") {
     CHECK_EQ(editable.capability(), BufferCapability::editable);
     CHECK_EQ(log.capability(), BufferCapability::append_only);
 }
+
+TEST_CASE("core::Buffer::undo() reverses an insert") {
+    Buffer buffer { "b", BufferCapability::editable, "hello" };
+    buffer.insert({ 0, 2, 0 }, "X");
+    CHECK_EQ(buffer.line(0), "heXllo");
+
+    auto const position { buffer.undo() };
+    REQUIRE(position.has_value());
+    CHECK_EQ(*position, Position { 0, 2, 0 });
+    CHECK_EQ(buffer.line(0), "hello");
+    CHECK_FALSE(buffer.undo().has_value()); // history exhausted
+}
+
+TEST_CASE("core::Buffer::undo() reverses an erase, restoring the text") {
+    Buffer buffer { "b", BufferCapability::editable, "caf\xc3\xa9!" };
+    buffer.erase({ 0, 3, 0 }); // the é, one character, two bytes
+    CHECK_EQ(buffer.line(0), "caf!");
+
+    auto const position { buffer.undo() };
+    REQUIRE(position.has_value());
+    CHECK_EQ(buffer.line(0), "caf\xc3\xa9!");
+    CHECK_EQ(*position, Position { 0, 4, 0 }); // just past the restored text
+}
+
+TEST_CASE("core::Buffer::undo() reverses split and join") {
+    Buffer buffer { "b", BufferCapability::editable, "hello" };
+    buffer.split_line({ 0, 2, 0 });
+    CHECK_EQ(buffer.line_count(), 2u);
+    buffer.undo();
+    CHECK_EQ(buffer.line_count(), 1u);
+    CHECK_EQ(buffer.line(0), "hello");
+
+    Buffer joined { "b", BufferCapability::editable, "ab\ncd" };
+    joined.erase({ 0, 2, 0 }); // join at end of first line
+    CHECK_EQ(joined.line_count(), 1u);
+    joined.undo();
+    CHECK_EQ(joined.line_count(), 2u);
+    CHECK_EQ(joined.line(0), "ab");
+    CHECK_EQ(joined.line(1), "cd");
+}
+
+TEST_CASE("core::Buffer a typing run undoes as one edit") {
+    Buffer buffer { "b", BufferCapability::editable };
+    buffer.insert({ 0, 0, 0 }, "a");
+    buffer.insert({ 0, 1, 0 }, "b");
+    buffer.insert({ 0, 2, 0 }, "c");
+    CHECK_EQ(buffer.line(0), "abc");
+
+    buffer.undo(); // coalesced: one undo removes the whole run
+    CHECK_EQ(buffer.line(0), "");
+    CHECK_FALSE(buffer.undo().has_value());
+}
+
+TEST_CASE("core::Buffer a backspace run undoes as one edit") {
+    Buffer buffer { "b", BufferCapability::editable, "abc" };
+    buffer.erase({ 0, 2, 0 }); // backspacing: c, then b, then a
+    buffer.erase({ 0, 1, 0 });
+    buffer.erase({ 0, 0, 0 });
+    CHECK_EQ(buffer.line(0), "");
+
+    buffer.undo();
+    CHECK_EQ(buffer.line(0), "abc");
+    CHECK_FALSE(buffer.undo().has_value());
+}
+
+TEST_CASE("core::Buffer a delete-forward run undoes as one edit") {
+    Buffer buffer { "b", BufferCapability::editable, "abc" };
+    buffer.erase({ 0, 0, 0 });
+    buffer.erase({ 0, 0, 0 });
+    buffer.erase({ 0, 0, 0 });
+    CHECK_EQ(buffer.line(0), "");
+
+    buffer.undo();
+    CHECK_EQ(buffer.line(0), "abc");
+    CHECK_FALSE(buffer.undo().has_value());
+}
+
+TEST_CASE("core::Buffer typing at different spots stays separate edits") {
+    Buffer buffer { "b", BufferCapability::editable, "xy" };
+    buffer.insert({ 0, 0, 0 }, "a"); // "axy"
+    buffer.insert({ 0, 3, 0 }, "b"); // "axyb": not adjacent to the first
+    buffer.undo();
+    CHECK_EQ(buffer.line(0), "axy");
+    buffer.undo();
+    CHECK_EQ(buffer.line(0), "xy");
+}
+
+TEST_CASE("core::Buffer::redo() re-applies, and a new edit clears redo") {
+    Buffer buffer { "b", BufferCapability::editable, "hello" };
+    buffer.insert({ 0, 5, 0 }, "!");
+    buffer.undo();
+    CHECK_EQ(buffer.line(0), "hello");
+
+    auto const position { buffer.redo() };
+    REQUIRE(position.has_value());
+    CHECK_EQ(buffer.line(0), "hello!");
+    CHECK_EQ(*position, Position { 0, 6, 0 });
+
+    buffer.undo();
+    buffer.insert({ 0, 0, 0 }, "?"); // editing forks history
+    CHECK_FALSE(buffer.redo().has_value());
+}
+
+TEST_CASE("core::Buffer appends are not undoable") {
+    Buffer buffer { "log", BufferCapability::editable, "start" };
+    buffer.append(" more");
+    CHECK_FALSE(buffer.undo().has_value());
+}
+
+TEST_CASE("core::Buffer undo round-trips a mixed edit sequence") {
+    Buffer buffer { "b", BufferCapability::editable, "hello world" };
+    buffer.split_line({ 0, 5, 0 });   // "hello" / " world"
+    buffer.insert({ 1, 0, 0 }, "-");  // "hello" / "- world"
+    buffer.erase({ 0, 4, 0 });        // "hell" / "- world"
+
+    buffer.undo();
+    buffer.undo();
+    buffer.undo();
+    CHECK_EQ(buffer.line_count(), 1u);
+    CHECK_EQ(buffer.line(0), "hello world");
+
+    buffer.redo();
+    buffer.redo();
+    buffer.redo();
+    CHECK_EQ(buffer.line_count(), 2u);
+    CHECK_EQ(buffer.line(0), "hell");
+    CHECK_EQ(buffer.line(1), "- world");
+}

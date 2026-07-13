@@ -99,6 +99,9 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     if (area.width == 0 || area.height == 0) {
         return;
     }
+    // the buffer may have shrunk under us (undo, edits from another pane
+    // sharing it): pull the cursor back inside before using it to scroll
+    _cursor = clamp(_cursor);
 
     Color const border {
         theme.color(focused ? Theme::Usage::border_focused : Theme::Usage::border)
