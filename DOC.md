@@ -169,6 +169,13 @@ never empty (always ≥ 1 line). Its `BufferCapability` gates mutation:
 - `append_only`: those three all return false; only `append` (which splits on `\n`) grows the
   buffer. This is the PTY-scrollback model.
 
+A buffer can be tied to a file: `path()`/`set_path()`, and a `dirty()` flag set by every
+mutation (edits, undo/redo, appends) and cleared by `mark_saved()` - panes show it as a `*`
+after the title of editable buffers. The disk side lives in FileIo.hpp (`read_file` /
+`write_file`, `std::fstream`-based; write joins lines with a trailing POSIX newline, read
+strips it) - free functions because file IO ultimately belongs to the Files plugin (README),
+and these will become its backend.
+
 Buffers own their undo history (the README puts undo in the core, and history belongs to the
 content, not the view - two panes sharing a buffer share its history). Every successful edit
 records an invertible `Edit` (kind + position + text); `undo()`/`redo()` replay inverses off
@@ -232,6 +239,8 @@ will register theirs over the wire protocol, name-spaced by plugin name.
 **`Palette`** (Palette.cpp) - the command palette UI, a modal overlay (not a pane). `open()`
 takes a snapshot of `(name, title)` items and sorts by title; typing filters
 (case-insensitive substring), up/down move the selection, RETURN picks, ESCAPE closes.
+`open_input(title)` reuses the same overlay as a free-text prompt (no items; RETURN picks the
+typed text, read back via `query()`) - that is how Open file / Save as ask for a path.
 `handle(KeyEvent)` returns an `Outcome` (`ignored / updated / closed / picked`) so the caller
 knows what to repaint and whether to run `selected_name()` - the palette itself never runs
 anything. `draw()` paints a centered, capped-size box (focused-border color, `Commands`
