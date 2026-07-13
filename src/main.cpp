@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <format>
 #include <functional>
 #include <print>
@@ -127,6 +128,39 @@ auto describe(core::Event const& event) -> std::string {
             "mouse {} {}:{}",
             event_id(event), event.mouse.position.line, event.mouse.position.column
         );
+    }
+}
+
+//! The bytes a terminal would send for this key - for forwarding into a PTY.
+//! Empty when the key has no terminal encoding here.
+auto key_to_bytes(core::KeyEvent const& key) -> std::string {
+    using core::Key;
+    if (key.key == Key::character) {
+        if (key.mods.ctrl && key.text.size() == 1
+            && key.text[0] >= 'a' && key.text[0] <= 'z') {
+            return std::string(1, static_cast<char>(key.text[0] - 'a' + 1));
+        }
+        if (key.mods.alt) {
+            return "\x1b" + key.text;
+        }
+        return key.text;
+    }
+    switch (key.key) {
+        case Key::enter: return "\r";
+        case Key::tab: return "\t";
+        case Key::backspace: return "\x7f";
+        case Key::escape: return "\x1b";
+        case Key::up: return "\x1b[A";
+        case Key::down: return "\x1b[B";
+        case Key::right: return "\x1b[C";
+        case Key::left: return "\x1b[D";
+        case Key::home: return "\x1b[H";
+        case Key::end: return "\x1b[F";
+        case Key::del: return "\x1b[3~";
+        case Key::insert: return "\x1b[2~";
+        case Key::page_up: return "\x1b[5~";
+        case Key::page_down: return "\x1b[6~";
+        default: return {};
     }
 }
 
@@ -335,6 +369,10 @@ int main() {
     } });
     registry.add({ "pane.float", "Float pane", [&] { session.float_focused(); } });
     registry.add({ "pane.dock", "Dock pane", [&] { session.dock_focused(); } });
+    registry.add({ "pty.shell", "Run a shell in a new PTY", [&] {
+        char const* shell { std::getenv("SHELL") };
+        session.open_pty_pane({ shell != nullptr ? shell : "/bin/sh" });
+    } });
 
     // ---------------------------------------------------------------
     // Rendering
@@ -488,11 +526,25 @@ int main() {
 
     while (running) {
         auto const event { reader.poll(100) };
-        if (!event) {
-            continue;
-        }
         damage.clear();
         full_repaint = false;
+
+        // drain running shells into their scrollback, event or not
+        for (uint32_t const id : session.pump_ptys()) {
+            if (auto* pane { session.pane(id) }) {
+                if (auto const area { session.pane_area(id) }) {
+                    pane->scroll_to_bottom(*area);
+                    damage.push_back(*area);
+                }
+            }
+        }
+
+        if (!event) {
+            if (!damage.empty()) {
+                repaint(damage);
+            }
+            continue;
+        }
 
         // every event lands in the log buffer, pane or no pane
         log_buffer->append("\n" + describe(*event));
@@ -510,6 +562,7 @@ int main() {
             screen = { { 0, 0, 0 }, terminfo.width(), terminfo.height() };
             session.set_screen(screen);
             session.move_float(log_pane, log_rect());
+            session.resize_ptys(); // children get SIGWINCH for their new areas
             full_repaint = true;
         } else if (palette.is_open()) {
             // modal: the palette takes every key; Master closes it again
@@ -537,10 +590,18 @@ int main() {
         } else if (auto const bound { bindings.find(event_id(*event)) };
                    bound != bindings.end()) {
             bound->second(*event);
-        } else if (event->type == core::EventType::key
-                   && !event->key.mods.ctrl && !event->key.mods.alt) {
-            // unbound plain keys go to the focused pane as editing
-            if (auto* pane { session.focused_pane() }) {
+        } else if (event->type == core::EventType::key) {
+            auto* pane { session.focused_pane() };
+            if (pane != nullptr && pane->type() == core::PaneType::pty) {
+                // unbound keys - modifiers included, so ctrl-c reaches the
+                // child - are forwarded to the pty; output comes back via
+                // the pump
+                if (auto const bytes { key_to_bytes(event->key) }; !bytes.empty()) {
+                    session.write_to_pty(session.focused_id(), bytes);
+                }
+            } else if (pane != nullptr
+                       && !event->key.mods.ctrl && !event->key.mods.alt) {
+                // unbound plain keys go to the focused pane as editing
                 if (edit_pane(*pane, event->key)) {
                     mark_focused();
                 }
