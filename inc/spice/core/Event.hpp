@@ -66,6 +66,7 @@ struct MouseEvent {
 enum class EventType : uint8_t {
     key,
     mouse,
+    resize, //!< the terminal changed size; re-query TermInfo for the new one
 };
 
 //! A single user input. `type` says which member carries the event.

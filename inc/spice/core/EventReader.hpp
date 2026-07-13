@@ -3,6 +3,7 @@
 
 #include "spice/core/Event.hpp"
 #include "spice/core/EventParser.hpp"
+#include <csignal>
 #include <deque>
 #include <optional>
 #include <termios.h>
@@ -11,8 +12,10 @@ namespace spice::core {
 
 //! Owns the input side of the terminal: switches stdin to raw mode, enables
 //! SGR mouse reporting, and turns the byte stream into Events through an
-//! EventParser. The terminal is restored on destruction. Safe to construct
-//! without a tty; poll() then simply never returns an event.
+//! EventParser. It also installs a SIGWINCH handler, surfacing terminal
+//! resizes as EventType::resize. The terminal (and the previous signal
+//! handler) are restored on destruction. Safe to construct without a tty;
+//! poll() then simply never returns an event.
 class EventReader {
 public:
     EventReader();
@@ -31,6 +34,7 @@ private:
     EventParser _parser;
     std::deque<Event> _queue;
     termios _saved {};
+    struct sigaction _saved_sigwinch {};
     bool _raw { false };
 };
 
