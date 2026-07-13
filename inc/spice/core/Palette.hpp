@@ -33,6 +33,12 @@ public:
 
     //! Opens over these items, sorted by title; resets filter and selection.
     auto open(std::vector<Item> items) -> void;
+
+    //! Opens as a free-text prompt titled `title` (no items): typing edits
+    //! the text, RETURN picks it - read it back with query().
+    auto open_input(std::string title) -> void;
+    auto is_input() const -> bool;
+
     auto close() -> void;
     auto is_open() const -> bool;
 
@@ -59,6 +65,8 @@ private:
     auto refilter() -> void;
 
     bool _open { false };
+    bool _input { false };
+    std::string _title;
     std::vector<Item> _items;
     std::vector<Item> _filtered;
     std::string _query;

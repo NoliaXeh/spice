@@ -11,7 +11,7 @@ namespace {
 
 using namespace spice::core;
 
-constexpr std::string_view title { "Commands" };
+constexpr std::string_view commands_title { "Commands" };
 constexpr std::string_view prompt { "> " };
 constexpr std::string_view no_match { "(no matching command)" };
 
@@ -58,11 +58,28 @@ namespace spice::core {
 auto Palette::open(std::vector<Item> items) -> void {
     _items = std::move(items);
     std::ranges::sort(_items, {}, &Item::title);
+    _title = commands_title;
+    _input = false;
     _query.clear();
     _selected = 0;
     _scroll = 0;
     _open = true;
     refilter();
+}
+
+auto Palette::open_input(std::string title) -> void {
+    _items.clear();
+    _title = std::move(title);
+    _input = true;
+    _query.clear();
+    _selected = 0;
+    _scroll = 0;
+    _open = true;
+    refilter();
+}
+
+auto Palette::is_input() const -> bool {
+    return _input;
 }
 
 auto Palette::close() -> void {
@@ -120,7 +137,7 @@ auto Palette::handle(KeyEvent const& key) -> Outcome {
         return Outcome::updated;
 
     case Key::enter:
-        if (_filtered.empty()) {
+        if (!_input && _filtered.empty()) {
             return Outcome::ignored;
         }
         _open = false;
@@ -189,6 +206,7 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
     uint32_t const left { rect.position.column };
     uint32_t const right { rect.position.column + rect.width - 1 };
 
+    std::string_view const title { _title };
     for (uint32_t column { left }; column <= right; ++column) {
         std::string_view top_glyph { "─" };
         uint32_t const title_start { left + 2 };
@@ -227,7 +245,7 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
         Position const origin { top + 2 + row, left + 1, 0 };
         size_t const index { _scroll + row };
 
-        if (_filtered.empty() && row == 0) {
+        if (!_input && _filtered.empty() && row == 0) {
             paint_row(grid, origin, content_width, no_match, info, background);
         } else if (index < _filtered.size()) {
             bool const selected { index == _selected };

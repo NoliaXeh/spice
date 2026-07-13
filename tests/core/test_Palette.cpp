@@ -124,6 +124,45 @@ TEST_CASE("core::Palette::draw() paints title, query and highlighted selection")
     CHECK_EQ(selected_bg, theme.color(Theme::Usage::selection_background));
 }
 
+TEST_CASE("core::Palette input mode picks the typed text") {
+    Palette palette;
+    palette.open_input("Open file");
+    CHECK(palette.is_open());
+    CHECK(palette.is_input());
+
+    press(palette, Key::character, "/");
+    press(palette, Key::character, "a");
+    press(palette, Key::character, "b");
+    CHECK_EQ(press(palette, Key::enter), Palette::Outcome::picked);
+    CHECK_EQ(palette.query(), "/ab");
+    CHECK_FALSE(palette.is_open());
+}
+
+TEST_CASE("core::Palette input mode escape cancels") {
+    Palette palette;
+    palette.open_input("Save as");
+    press(palette, Key::character, "x");
+    CHECK_EQ(press(palette, Key::escape), Palette::Outcome::closed);
+    CHECK_FALSE(palette.is_open());
+}
+
+TEST_CASE("core::Palette input mode draws its title, command mode resets it") {
+    Palette palette;
+    Grid grid { 60, 20 };
+    Theme const theme;
+    Rectangle const screen { { 0, 0, 0 }, 60, 20 };
+    Rectangle const rect { Palette::area(screen) };
+
+    palette.open_input("Save as");
+    palette.draw(grid, screen, theme);
+    CHECK_EQ(grid.char_at({ rect.position.line, rect.position.column + 2, 0 }), "S");
+
+    palette.open(items());
+    CHECK_FALSE(palette.is_input());
+    palette.draw(grid, screen, theme);
+    CHECK_EQ(grid.char_at({ rect.position.line, rect.position.column + 2, 0 }), "C");
+}
+
 TEST_CASE("core::Palette::draw() shows a hint when nothing matches") {
     Palette palette;
     palette.open(items());
