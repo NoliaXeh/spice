@@ -169,6 +169,14 @@ never empty (always ≥ 1 line). Its `BufferCapability` gates mutation:
 - `append_only`: those three all return false; only `append` (which splits on `\n`) grows the
   buffer. This is the PTY-scrollback model.
 
+Buffers own their undo history (the README puts undo in the core, and history belongs to the
+content, not the view - two panes sharing a buffer share its history). Every successful edit
+records an invertible `Edit` (kind + position + text); `undo()`/`redo()` replay inverses off
+two stacks, returning where the change happened so the caller can place its cursor. Runs are
+coalesced - typing forward, backspacing, or deleting at one spot each merge into a single
+edit, so one undo removes the whole run. A new edit clears the redo stack; `append` records
+nothing (arriving content is not an edit); history is capped at 1000 edits.
+
 **`Pane`** (Pane.cpp) - a view: `PaneType` (edit / grid / pty), a `shared_ptr<Buffer>` (shared: two panes can view one buffer; a
 buffer with no pane just lives on), a cursor and a scroll offset - the only view-specific
 state. `draw(grid, area, focused, theme)` paints a box-drawing border (`┌─┐│└┘`) with the
