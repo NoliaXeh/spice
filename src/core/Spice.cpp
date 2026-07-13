@@ -114,6 +114,15 @@ auto Spice::pane_count() const -> size_t {
     return _panes.size();
 }
 
+auto Spice::pane_ids() const -> std::vector<uint32_t> {
+    std::vector<uint32_t> ids;
+    ids.reserve(_panes.size());
+    for (auto const& [id, pane] : _panes) {
+        ids.push_back(id);
+    }
+    return ids;
+}
+
 auto Spice::pane(uint32_t id) -> Pane* {
     auto const found { _panes.find(id) };
     return found != _panes.end() ? &found->second : nullptr;

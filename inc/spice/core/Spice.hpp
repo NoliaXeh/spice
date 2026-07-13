@@ -51,6 +51,7 @@ public:
     auto close_focused_pane() -> void;
 
     auto pane_count() const -> size_t;
+    auto pane_ids() const -> std::vector<uint32_t>;
     auto pane(uint32_t id) -> Pane*; //!< nullptr if unknown
     auto focused_id() const -> uint32_t; //!< 0 when no pane is focused
     auto focused_pane() -> Pane*;

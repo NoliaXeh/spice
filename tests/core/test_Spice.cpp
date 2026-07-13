@@ -57,6 +57,17 @@ TEST_CASE("core::Spice closing a pane keeps its buffer") {
     CHECK_EQ(session.buffers().size(), 1u); // Welcome buffer survives
 }
 
+TEST_CASE("core::Spice::pane_ids() lists every open pane") {
+    auto session { make_session() };
+    uint32_t const first { session.open_welcome_pane() };
+    auto buffer { session.create_buffer("s", core::BufferCapability::editable) };
+    uint32_t const second { session.open_pane(core::PaneType::edit, buffer) };
+    auto const ids { session.pane_ids() };
+    REQUIRE_EQ(ids.size(), 2u);
+    CHECK_EQ(ids[0], first);
+    CHECK_EQ(ids[1], second);
+}
+
 TEST_CASE("core::Spice the same buffer can be shown in two panes") {
     auto session { make_session() };
     auto buffer { session.create_buffer("shared", core::BufferCapability::editable, "hi") };
