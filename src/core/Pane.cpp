@@ -114,8 +114,13 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     uint32_t const left { area.position.column };
     uint32_t const right { area.position.column + area.width - 1 };
 
-    // border with the buffer's name as title: ┌ name ────┐
-    std::string_view const name { _buffer->name() };
+    // border with the buffer's name as title (a trailing * marks unsaved
+    // edits on editable buffers): ┌ name * ───┐
+    std::string title { _buffer->name() };
+    if (_buffer->capability() == BufferCapability::editable && _buffer->dirty()) {
+        title += " *";
+    }
+    std::string_view const name { title };
     for (uint32_t column { left }; column <= right; ++column) {
         std::string_view top_glyph { edge_h };
         uint32_t const title_start { left + 2 };
