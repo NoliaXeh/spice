@@ -8,6 +8,7 @@ add_library(core STATIC
     Buffer.cpp
     Layout.cpp
     Pane.cpp
+    Command.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 

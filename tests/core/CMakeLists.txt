@@ -8,6 +8,7 @@ add_executable(core_test
     test_Buffer.cpp
     test_Layout.cpp
     test_Pane.cpp
+    test_Command.cpp
 )
 
 target_link_libraries(core_test PRIVATE core)
