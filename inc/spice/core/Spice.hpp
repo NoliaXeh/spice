@@ -38,7 +38,12 @@ public:
 
     //! Opens a tiled pane on a buffer, splitting the focused tile (or
     //! filling the screen for the first pane). Focuses it; returns its id.
+    //! This overload picks the orientation from the tile's shape.
     auto open_pane(PaneType type, std::shared_ptr<Buffer> buffer) -> uint32_t;
+
+    //! Same, with an explicit orientation: `horizontal` puts the new pane
+    //! to the right of the split tile (vertical divider), otherwise below.
+    auto open_pane(PaneType type, std::shared_ptr<Buffer> buffer, bool horizontal) -> uint32_t;
 
     //! Opens a floating pane at `rect`, on top of the tree. Focuses it.
     auto open_float(PaneType type, std::shared_ptr<Buffer> buffer, Rectangle rect) -> uint32_t;

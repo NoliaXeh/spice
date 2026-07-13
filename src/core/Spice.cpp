@@ -70,13 +70,17 @@ auto Spice::insertion_target() const -> uint32_t {
 }
 
 auto Spice::open_pane(PaneType type, std::shared_ptr<Buffer> buffer) -> uint32_t {
-    uint32_t const id { _next_pane_id++ };
-    uint32_t const at { insertion_target() };
     bool horizontal { true };
-    if (auto const rect { pane_area(at) }) {
+    if (auto const rect { pane_area(insertion_target()) }) {
         horizontal = split_is_horizontal(*rect);
     }
-    _layout.insert(id, at, horizontal);
+    return open_pane(type, std::move(buffer), horizontal);
+}
+
+auto Spice::open_pane(PaneType type, std::shared_ptr<Buffer> buffer, bool horizontal)
+    -> uint32_t {
+    uint32_t const id { _next_pane_id++ };
+    _layout.insert(id, insertion_target(), horizontal);
     _panes.emplace(id, Pane { type, std::move(buffer) });
     _focused = id;
     return id;

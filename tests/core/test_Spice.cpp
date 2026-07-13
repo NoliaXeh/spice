@@ -46,6 +46,22 @@ TEST_CASE("core::Spice::open_pane() splits the focused tile and focuses the new 
     CHECK_NE(*first_area, *second_area);
 }
 
+TEST_CASE("core::Spice::open_pane() with an explicit orientation") {
+    auto session { make_session() }; // 80x24
+    uint32_t const first { session.open_welcome_pane() };
+    auto buffer { session.create_buffer("s", core::BufferCapability::editable) };
+
+    // stacked: 80x24 would normally split side by side
+    uint32_t const below { session.open_pane(core::PaneType::edit, buffer, false) };
+    CHECK_EQ(session.pane_area(first), core::Rectangle { { 0, 0, 0 }, 80, 12 });
+    CHECK_EQ(session.pane_area(below), core::Rectangle { { 12, 0, 0 }, 80, 12 });
+
+    // side by side: splits the focused (bottom) tile even though it is wide
+    uint32_t const right { session.open_pane(core::PaneType::edit, buffer, true) };
+    CHECK_EQ(session.pane_area(below), core::Rectangle { { 12, 0, 0 }, 40, 12 });
+    CHECK_EQ(session.pane_area(right), core::Rectangle { { 12, 40, 0 }, 40, 12 });
+}
+
 TEST_CASE("core::Spice closing a pane keeps its buffer") {
     auto session { make_session() };
     session.open_welcome_pane();
