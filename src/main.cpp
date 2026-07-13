@@ -8,9 +8,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "spice/core/Command.hpp"
 #include "spice/core/Event.hpp"
 #include "spice/core/EventReader.hpp"
 #include "spice/core/Grid.hpp"
+#include "spice/core/Palette.hpp"
 #include "spice/core/Position.hpp"
 #include "spice/core/Rectangle.hpp"
 #include "spice/core/Spice.hpp"
@@ -25,8 +27,12 @@ using core::Theme;
 
 namespace {
 
+//! The Master key: a prefix reaching Spice from any pane (CONFIG.md default).
+//! Terminals send ctrl-space as NUL, which parses to this id.
+constexpr std::string_view master_key { "C-' '" };
+
 // ---------------------------------------------------------------
-// Event descriptions (for the floating "events" pane)
+// Event descriptions (for the floating "events" pane and dispatch)
 // ---------------------------------------------------------------
 
 auto mods_text(core::Modifiers mods) -> std::string {
@@ -224,10 +230,99 @@ int main() {
     std::fflush(stdout);
     core::EventReader reader;
 
-    uint32_t scratch_count { 0 };
+    // ---------------------------------------------------------------
+    // State the commands and handlers mutate. `damage`/`full_repaint`
+    // are reset each iteration and consumed by repaint().
+    // ---------------------------------------------------------------
 
-    //! Clears the grid, draws every pane, renders `rects` (all when empty),
-    //! and parks the terminal cursor on the focused pane's cursor.
+    bool running { true };
+    uint32_t scratch_count { 0 };
+    std::vector<Rectangle> damage;
+    bool full_repaint { false };
+
+    core::CommandRegistry registry;
+    core::Palette palette;
+
+    auto const mark_focused = [&] {
+        if (auto const area { session.pane_area(session.focused_id()) }) {
+            damage.push_back(*area);
+        }
+    };
+
+    // ---------------------------------------------------------------
+    // Built-in commands (README's list, minus what needs plugins/PTY)
+    // ---------------------------------------------------------------
+
+    auto const open_list_float = [&](std::string&& name, std::string const& content) {
+        auto buffer {
+            session.create_buffer(std::move(name), core::BufferCapability::append_only, content)
+        };
+        Rectangle const rect {
+            { screen.position.line + 2, screen.position.column + 4, 0 },
+            screen.width / 2,
+            screen.height / 2,
+        };
+        session.open_float(core::PaneType::grid, std::move(buffer), rect);
+    };
+
+    registry.add({ "session.close", "Close Spice", [&] { running = false; } });
+    registry.add({ "session.welcome", "Open Welcome Pane", [&] {
+        session.open_welcome_pane();
+    } });
+    registry.add({ "buffer.new", "New buffer", [&] {
+        auto buffer { session.create_buffer(
+            std::format("scratch-{}", ++scratch_count), core::BufferCapability::editable
+        ) };
+        session.open_pane(core::PaneType::edit, std::move(buffer));
+    } });
+    registry.add({ "buffer.list", "List buffers", [&] {
+        std::string content { "buffers:" };
+        for (auto const& buffer : session.buffers()) {
+            content += std::format(
+                "\n  {} ({})", buffer->name(),
+                buffer->capability() == core::BufferCapability::editable
+                    ? "editable" : "append-only"
+            );
+        }
+        open_list_float("buffers", content);
+    } });
+    registry.add({ "pane.list", "List panes", [&] {
+        std::string content { "panes:" };
+        for (uint32_t const id : session.pane_ids()) {
+            content += std::format(
+                "\n  #{} {}{}", id, session.pane(id)->buffer()->name(),
+                id == session.focused_id() ? " (focused)" : ""
+            );
+        }
+        open_list_float("panes", content);
+    } });
+    registry.add({ "pane.close", "Close current pane", [&] {
+        session.close_focused_pane();
+        if (session.pane_count() == 0) {
+            running = false; // all panes closed: the program ends
+        }
+    } });
+    registry.add({ "pane.focus_left", "Move focus left", [&] {
+        session.move_focus(core::Direction::left);
+    } });
+    registry.add({ "pane.focus_right", "Move focus right", [&] {
+        session.move_focus(core::Direction::right);
+    } });
+    registry.add({ "pane.focus_up", "Move focus up", [&] {
+        session.move_focus(core::Direction::up);
+    } });
+    registry.add({ "pane.focus_down", "Move focus down", [&] {
+        session.move_focus(core::Direction::down);
+    } });
+    registry.add({ "pane.float", "Float pane", [&] { session.float_focused(); } });
+    registry.add({ "pane.dock", "Dock pane", [&] { session.dock_focused(); } });
+
+    // ---------------------------------------------------------------
+    // Rendering
+    // ---------------------------------------------------------------
+
+    //! Clears the grid, draws every pane (palette on top), renders `rects`
+    //! (all when empty), and parks the terminal cursor.
     auto const repaint = [&](std::vector<Rectangle> const& rects) {
         for (uint32_t line { 0 }; line < grid.height(); ++line) {
             for (uint32_t column { 0 }; column < grid.width(); ++column) {
@@ -238,6 +333,7 @@ int main() {
             }
         }
         session.draw(grid, theme);
+        palette.draw(grid, screen, theme); // no-op while closed
 
         if (rects.empty()) {
             grid.render(terminfo, { 0, 0, 0 });
@@ -247,29 +343,26 @@ int main() {
             }
         }
 
-        if (auto* focused { session.focused_pane() }) {
+        Position park { 0, 0, 0 };
+        if (palette.is_open()) {
+            park = palette.cursor_screen_position(screen);
+        } else if (auto* focused { session.focused_pane() }) {
             if (auto const area { session.pane_area(session.focused_id()) }) {
-                Position const at { focused->cursor_screen_position(*area) };
-                std::print("\x1b[{};{}H", at.line + 1, at.column + 1);
+                park = focused->cursor_screen_position(*area);
             }
         }
+        std::print("\x1b[{};{}H", park.line + 1, park.column + 1);
         std::fflush(stdout);
     };
 
     // ---------------------------------------------------------------
-    // Event dispatch: bindings map from event id to handler. What the
-    // handlers mutate lives above them; `damage`/`full_repaint` are reset
-    // each iteration and consumed by repaint().
+    // Key bindings: ids map to commands by name (as config keybinds
+    // will) or to interactive handlers (focus damage, clicks, palette).
     // ---------------------------------------------------------------
 
-    bool running { true };
-    std::vector<Rectangle> damage;
-    bool full_repaint { false };
-
-    auto const mark_focused = [&] {
-        if (auto const area { session.pane_area(session.focused_id()) }) {
-            damage.push_back(*area);
-        }
+    auto const run_command = [&](std::string_view name) {
+        registry.run(name);
+        full_repaint = true;
     };
 
     auto const move_focus = [&](core::Direction direction) {
@@ -292,27 +385,22 @@ int main() {
         }
     };
 
+    auto const open_palette = [&](core::Event const&) {
+        std::vector<core::Palette::Item> items;
+        for (auto const& command : registry.commands()) {
+            items.push_back({ command.name, command.title });
+        }
+        palette.open(std::move(items));
+        damage.push_back(core::Palette::area(screen));
+    };
+
     std::unordered_map<std::string, std::function<void(core::Event const&)>> const bindings {
-        { "C-'w'", [&](auto const&) { // close Spice
-            running = false;
-        } },
-        { "C-'n'", [&](auto const&) { // open a new pane
-            auto buffer { session.create_buffer(
-                std::format("scratch-{}", ++scratch_count),
-                core::BufferCapability::editable
-            ) };
-            session.open_pane(core::PaneType::edit, std::move(buffer));
-            full_repaint = true;
-        } },
-        { "C-'x'", [&](auto const&) { // close the current pane
-            session.close_focused_pane();
-            if (session.pane_count() == 0) {
-                running = false; // all panes closed: the program ends
-            }
-            full_repaint = true;
-        } },
-        { "C-'f'", [&](auto const&) { session.float_focused(); full_repaint = true; } },
-        { "C-'d'", [&](auto const&) { session.dock_focused(); full_repaint = true; } },
+        { std::string(master_key), open_palette },
+        { "C-'w'", [&](auto const&) { run_command("session.close"); } },
+        { "C-'n'", [&](auto const&) { run_command("buffer.new"); } },
+        { "C-'x'", [&](auto const&) { run_command("pane.close"); } },
+        { "C-'f'", [&](auto const&) { run_command("pane.float"); } },
+        { "C-'d'", [&](auto const&) { run_command("pane.dock"); } },
         { "C-up", [&](auto const&) { move_focus(core::Direction::up); } },
         { "C-down", [&](auto const&) { move_focus(core::Direction::down); } },
         { "C-left", [&](auto const&) { move_focus(core::Direction::left); } },
@@ -340,7 +428,29 @@ int main() {
             }
         }
 
-        if (auto const bound { bindings.find(event_id(*event)) }; bound != bindings.end()) {
+        if (palette.is_open()) {
+            // modal: the palette takes every key; Master closes it again
+            if (event_id(*event) == master_key) {
+                palette.close();
+                damage.push_back(core::Palette::area(screen));
+            } else if (event->type == core::EventType::key) {
+                switch (palette.handle(event->key)) {
+                case core::Palette::Outcome::updated:
+                    damage.push_back(core::Palette::area(screen));
+                    break;
+                case core::Palette::Outcome::closed:
+                    damage.push_back(core::Palette::area(screen));
+                    break;
+                case core::Palette::Outcome::picked:
+                    registry.run(palette.selected_name());
+                    full_repaint = true;
+                    break;
+                case core::Palette::Outcome::ignored:
+                    break;
+                }
+            }
+        } else if (auto const bound { bindings.find(event_id(*event)) };
+                   bound != bindings.end()) {
             bound->second(*event);
         } else if (event->type == core::EventType::key
                    && !event->key.mods.ctrl && !event->key.mods.alt) {
