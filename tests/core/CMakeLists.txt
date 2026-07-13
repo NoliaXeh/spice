@@ -10,6 +10,7 @@ add_executable(core_test
     test_Pane.cpp
     test_Command.cpp
     test_Palette.cpp
+    test_Pty.cpp
 )
 
 target_link_libraries(core_test PRIVATE core)
