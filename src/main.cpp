@@ -12,6 +12,7 @@
 #include "spice/core/Command.hpp"
 #include "spice/core/Event.hpp"
 #include "spice/core/EventReader.hpp"
+#include "spice/core/FileIo.hpp"
 #include "spice/core/Grid.hpp"
 #include "spice/core/Palette.hpp"
 #include "spice/core/Position.hpp"
@@ -169,7 +170,8 @@ auto key_to_bytes(core::KeyEvent const& key) -> std::string {
 // ---------------------------------------------------------------
 
 //! Applies an editing key to a pane; returns true if it did anything.
-auto edit_pane(core::Pane& pane, core::KeyEvent const& key) -> bool {
+//! `page` is how many lines page-up/down jump (the pane's content height).
+auto edit_pane(core::Pane& pane, core::KeyEvent const& key, uint32_t page) -> bool {
     auto& buffer { *pane.buffer() };
     Position const cursor { pane.cursor() };
 
@@ -230,6 +232,22 @@ auto edit_pane(core::Pane& pane, core::KeyEvent const& key) -> bool {
 
     case core::Key::down:
         pane.set_cursor({ cursor.line + 1, cursor.column, 0 }); // set_cursor clamps
+        return true;
+
+    case core::Key::home:
+        pane.set_cursor({ cursor.line, 0, 0 });
+        return true;
+
+    case core::Key::end:
+        pane.set_cursor({ cursor.line, buffer.line_length(cursor.line), 0 });
+        return true;
+
+    case core::Key::page_up:
+        pane.set_cursor({ cursor.line > page ? cursor.line - page : 0, cursor.column, 0 });
+        return true;
+
+    case core::Key::page_down:
+        pane.set_cursor({ cursor.line + page, cursor.column, 0 }); // clamped
         return true;
 
     default:
@@ -373,6 +391,66 @@ int main() {
         char const* shell { std::getenv("SHELL") };
         session.open_pty_pane({ shell != nullptr ? shell : "/bin/sh" });
     } });
+    // ---------------------------------------------------------------
+    // File commands. Open/Save-as need a path: they reuse the palette
+    // as a free-text prompt, and prompt_action receives what was typed.
+    // ---------------------------------------------------------------
+
+    std::function<void(std::string const&)> prompt_action;
+
+    auto const open_prompt = [&](std::string title,
+                                 std::function<void(std::string const&)> action) {
+        prompt_action = std::move(action);
+        palette.open_input(std::move(title));
+        damage.push_back(core::Palette::area(screen));
+    };
+
+    auto const save_focused_to = [&](std::string const& path) {
+        auto* pane { session.focused_pane() };
+        if (pane == nullptr || path.empty()) {
+            return;
+        }
+        auto& buffer { *pane->buffer() };
+        buffer.set_path(path);
+        if (core::write_file(path, buffer)) {
+            buffer.mark_saved();
+        }
+    };
+
+    registry.add({ "file.open", "Open file", [&] {
+        open_prompt("Open file", [&](std::string const& path) {
+            if (path.empty()) {
+                return;
+            }
+            auto const content { core::read_file(path) };
+            auto buffer { session.create_buffer(
+                std::string(path), core::BufferCapability::editable, content.value_or("")
+            ) };
+            buffer->set_path(path);
+            session.open_pane(core::PaneType::edit, std::move(buffer));
+        });
+    } });
+    registry.add({ "file.save", "Save", [&] {
+        auto* pane { session.focused_pane() };
+        if (pane == nullptr
+            || pane->buffer()->capability() != core::BufferCapability::editable) {
+            return;
+        }
+        if (pane->buffer()->path().empty()) { // never saved: ask where
+            open_prompt("Save as", save_focused_to);
+        } else {
+            save_focused_to(pane->buffer()->path());
+        }
+    } });
+    registry.add({ "file.save_as", "Save as", [&] {
+        auto* pane { session.focused_pane() };
+        if (pane == nullptr
+            || pane->buffer()->capability() != core::BufferCapability::editable) {
+            return;
+        }
+        open_prompt("Save as", save_focused_to);
+    } });
+
     registry.add({ "buffer.undo", "Undo", [&] {
         if (auto* pane { session.focused_pane() }) {
             if (auto const position { pane->buffer()->undo() }) {
@@ -530,6 +608,8 @@ int main() {
         { "C-'d'", [&](auto const&) { run_command("pane.dock"); } },
         { "C-'z'", [&](auto const&) { registry.run("buffer.undo"); mark_focused(); } },
         { "C-'y'", [&](auto const&) { registry.run("buffer.redo"); mark_focused(); } },
+        { "C-'s'", [&](auto const&) { run_command("file.save"); } },
+        { "C-'o'", [&](auto const&) { run_command("file.open"); } },
         { "C-up", [&](auto const&) { move_focus(core::Direction::up); } },
         { "C-down", [&](auto const&) { move_focus(core::Direction::down); } },
         { "C-left", [&](auto const&) { move_focus(core::Direction::left); } },
@@ -571,6 +651,8 @@ int main() {
             }
         }
 
+        auto const cancel_prompt = [&] { prompt_action = nullptr; };
+
         if (event->type == core::EventType::resize) {
             // rebuild the world at the new size; floats keep their absolute
             // rects, so glue the event log back onto the bottom-right corner
@@ -584,6 +666,7 @@ int main() {
             // modal: the palette takes every key; Master closes it again
             if (event_id(*event) == master_key) {
                 palette.close();
+                cancel_prompt();
                 damage.push_back(core::Palette::area(screen));
             } else if (event->type == core::EventType::key) {
                 switch (palette.handle(event->key)) {
@@ -591,10 +674,17 @@ int main() {
                     damage.push_back(core::Palette::area(screen));
                     break;
                 case core::Palette::Outcome::closed:
+                    cancel_prompt();
                     damage.push_back(core::Palette::area(screen));
                     break;
                 case core::Palette::Outcome::picked:
-                    registry.run(palette.selected_name());
+                    if (prompt_action) { // a prompt gets the typed text...
+                        auto const action { std::move(prompt_action) };
+                        prompt_action = nullptr;
+                        action(palette.query());
+                    } else { // ...the command palette runs the pick
+                        registry.run(palette.selected_name());
+                    }
                     full_repaint = true;
                     break;
                 case core::Palette::Outcome::ignored:
@@ -618,7 +708,12 @@ int main() {
             } else if (pane != nullptr
                        && !event->key.mods.ctrl && !event->key.mods.alt) {
                 // unbound plain keys go to the focused pane as editing
-                if (edit_pane(*pane, event->key)) {
+                uint32_t page { 1 };
+                if (auto const area { session.pane_area(session.focused_id()) }) {
+                    uint32_t const height { core::Pane::content_area(*area).height };
+                    page = height > 0 ? height : 1;
+                }
+                if (edit_pane(*pane, event->key, page)) {
                     mark_focused();
                 }
             }
