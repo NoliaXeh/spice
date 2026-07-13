@@ -101,10 +101,61 @@ auto Spice::open_welcome_pane() -> uint32_t {
     return open_pane(PaneType::edit, std::move(buffer));
 }
 
+auto Spice::open_pty_pane(std::vector<std::string> const& argv) -> uint32_t {
+    if (argv.empty()) {
+        return 0;
+    }
+    auto buffer { create_buffer(std::string(argv[0]), BufferCapability::append_only) };
+    uint32_t const id { open_pane(PaneType::pty, std::move(buffer)) };
+
+    auto content { Pane::content_area(pane_area(id).value_or(_screen)) };
+    PtyEntry entry;
+    if (!entry.pty.spawn(argv, content.width, content.height)) {
+        close_focused_pane(); // could not start: no pane to show
+        return 0;
+    }
+    _ptys.emplace(id, std::move(entry));
+    return id;
+}
+
+auto Spice::pump_ptys() -> std::vector<uint32_t> {
+    std::vector<uint32_t> changed;
+    for (auto& [id, entry] : _ptys) {
+        std::string const raw { entry.pty.read_output() };
+        std::string text { entry.filter.feed(raw) };
+        if (!entry.pty.running()) {
+            text += "\n[exited]";
+        }
+        if (!text.empty()) {
+            if (auto* p { pane(id) }) {
+                p->buffer()->append(text);
+                changed.push_back(id);
+            }
+        }
+    }
+    std::erase_if(_ptys, [](auto const& item) { return !item.second.pty.running(); });
+    return changed;
+}
+
+auto Spice::write_to_pty(uint32_t id, std::string_view bytes) -> bool {
+    auto const found { _ptys.find(id) };
+    return found != _ptys.end() && found->second.pty.write_input(bytes);
+}
+
+auto Spice::resize_ptys() -> void {
+    for (auto& [id, entry] : _ptys) {
+        if (auto const area { pane_area(id) }) {
+            auto const content { Pane::content_area(*area) };
+            entry.pty.resize(content.width, content.height);
+        }
+    }
+}
+
 auto Spice::close_focused_pane() -> void {
     if (_focused == 0) {
         return;
     }
+    _ptys.erase(_focused); // kills the child; the scrollback buffer stays
     _layout.remove(_focused);
     _panes.erase(_focused); // the buffer stays in _buffers
 

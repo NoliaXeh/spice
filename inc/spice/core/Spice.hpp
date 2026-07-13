@@ -5,6 +5,7 @@
 #include "spice/core/Grid.hpp"
 #include "spice/core/Layout.hpp"
 #include "spice/core/Pane.hpp"
+#include "spice/core/Pty.hpp"
 #include "spice/core/Rectangle.hpp"
 #include "spice/core/Theme.hpp"
 #include <cstddef>
@@ -51,6 +52,22 @@ public:
     //! The "Welcome" pane shown on startup (README).
     auto open_welcome_pane() -> uint32_t;
 
+    //! Opens a PTY pane running `argv` on a pseudo-terminal sized to the
+    //! pane's content, with an append-only scrollback buffer. Returns the
+    //! pane id, or 0 when the process could not be started.
+    auto open_pty_pane(std::vector<std::string> const& argv) -> uint32_t;
+
+    //! Drains every running pty into its scrollback (filtered); returns
+    //! the ids of the panes whose buffer changed. A child that hung up
+    //! gets a closing "[exited]" line.
+    auto pump_ptys() -> std::vector<uint32_t>;
+
+    //! Sends bytes to the pty behind a pane; false if it has none running.
+    auto write_to_pty(uint32_t id, std::string_view bytes) -> bool;
+
+    //! Propagates each pty pane's current content size to its pty.
+    auto resize_ptys() -> void;
+
     //! Closes the focused pane; its buffer survives. When pane_count()
     //! reaches 0 the program should end (README).
     auto close_focused_pane() -> void;
@@ -87,11 +104,17 @@ private:
     //! The tile to split when inserting: the focused tile, else the largest.
     auto insertion_target() const -> uint32_t;
 
+    struct PtyEntry {
+        Pty pty;
+        PtyFilter filter;
+    };
+
     std::string _name;
     Rectangle _screen {};
     uint32_t _next_pane_id { 1 };
     std::vector<std::shared_ptr<Buffer>> _buffers;
     std::map<uint32_t, Pane> _panes;
+    std::map<uint32_t, PtyEntry> _ptys;
     Layout _layout;
     uint32_t _focused { 0 };
 };

@@ -3,6 +3,9 @@
 
 #include "spice/core/Spice.hpp"
 
+#include <chrono>
+#include <thread>
+
 using namespace spice;
 
 namespace {
@@ -186,6 +189,49 @@ TEST_CASE("core::Spice::pane_at() prefers floats over tiles") {
     };
     CHECK_EQ(session.pane_at({ 6, 6, 0 }), floating);
     CHECK_EQ(session.pane_at({ 0, 0, 0 }), tiled);
+}
+
+TEST_CASE("core::Spice runs a pty pane end to end") {
+    auto session { make_session() };
+    session.open_welcome_pane();
+
+    uint32_t const id { session.open_pty_pane({ "/bin/sh", "-c", "printf 'pty-works\\n'" }) };
+    REQUIRE_NE(id, 0u);
+    REQUIRE_NE(session.pane(id), nullptr);
+    CHECK_EQ(session.pane(id)->type(), core::PaneType::pty);
+    CHECK_EQ(session.pane(id)->buffer()->capability(), core::BufferCapability::append_only);
+
+    auto const buffer { session.pane(id)->buffer() };
+    auto const deadline { std::chrono::steady_clock::now() + std::chrono::seconds(2) };
+    bool seen { false };
+    while (!seen && std::chrono::steady_clock::now() < deadline) {
+        session.pump_ptys();
+        for (uint32_t line { 0 }; line < buffer->line_count(); ++line) {
+            if (buffer->line(line).find("pty-works") != std::string_view::npos) {
+                seen = true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(seen);
+
+    // once the child exits, the scrollback gets the closing line and
+    // writes are refused; the buffer itself survives
+    bool exited { false };
+    for (uint32_t line { 0 }; line < buffer->line_count(); ++line) {
+        if (buffer->line(line) == "[exited]") {
+            exited = true;
+        }
+    }
+    CHECK(exited);
+    CHECK_FALSE(session.write_to_pty(id, "x"));
+}
+
+TEST_CASE("core::Spice::open_pty_pane() cleans up when the spawn fails") {
+    auto session { make_session() };
+    session.open_welcome_pane();
+    CHECK_EQ(session.open_pty_pane({}), 0u);
+    CHECK_EQ(session.pane_count(), 1u); // no orphan pane left behind
 }
 
 TEST_CASE("core::Spice::draw() renders every pane into the grid") {
