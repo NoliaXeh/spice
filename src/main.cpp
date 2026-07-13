@@ -100,6 +100,9 @@ auto button_name(core::MouseButton button) -> std::string_view {
 //! The position-independent identity of an event, used both as the key of
 //! the binding map and inside describe(): "C-'w'", "S-up", "press left"...
 auto event_id(core::Event const& event) -> std::string {
+    if (event.type == core::EventType::resize) {
+        return "resize";
+    }
     if (event.type == core::EventType::key) {
         auto const& key { event.key };
         if (key.key == core::Key::character) {
@@ -114,12 +117,17 @@ auto event_id(core::Event const& event) -> std::string {
 }
 
 auto describe(core::Event const& event) -> std::string {
-    if (event.type == core::EventType::key) {
+    switch (event.type) {
+    case core::EventType::key:
         return "key " + event_id(event);
+    case core::EventType::resize:
+        return event_id(event);
+    default:
+        return std::format(
+            "mouse {} {}:{}",
+            event_id(event), event.mouse.position.line, event.mouse.position.column
+        );
     }
-    return std::format(
-        "mouse {} {}:{}", event_id(event), event.mouse.position.line, event.mouse.position.column
-    );
 }
 
 // ---------------------------------------------------------------
@@ -206,7 +214,7 @@ int main() {
 
     Theme const theme;
     Grid grid { terminfo.width(), terminfo.height() };
-    Rectangle const screen { { 0, 0, 0 }, terminfo.width(), terminfo.height() };
+    Rectangle screen { { 0, 0, 0 }, terminfo.width(), terminfo.height() }; // updated on resize
 
     core::Spice session { "Spice" };
     session.set_screen(screen);
@@ -217,13 +225,15 @@ int main() {
     auto log_buffer {
         session.create_buffer("events", core::BufferCapability::append_only, "events")
     };
-    uint32_t const log_width { screen.width / 3 > 20 ? screen.width / 3 : 20 };
-    Rectangle const log_area {
-        { screen.height - screen.height / 3, screen.width - log_width, 0 },
-        log_width,
-        screen.height / 3,
+    auto const log_rect = [&screen]() -> Rectangle {
+        uint32_t const width { screen.width / 3 > 20 ? screen.width / 3 : 20 };
+        return {
+            { screen.height - screen.height / 3, screen.width - width, 0 },
+            width,
+            screen.height / 3,
+        };
     };
-    uint32_t const log_pane { session.open_float(core::PaneType::grid, log_buffer, log_area) };
+    uint32_t const log_pane { session.open_float(core::PaneType::grid, log_buffer, log_rect()) };
     session.focus(welcome);
 
     std::print("\x1b[?1049h"); // alternate screen
@@ -430,7 +440,15 @@ int main() {
             }
         }
 
-        if (palette.is_open()) {
+        if (event->type == core::EventType::resize) {
+            // rebuild the world at the new size; floats keep their absolute
+            // rects, so glue the event log back onto the bottom-right corner
+            grid = Grid { terminfo.width(), terminfo.height() };
+            screen = { { 0, 0, 0 }, terminfo.width(), terminfo.height() };
+            session.set_screen(screen);
+            session.move_float(log_pane, log_rect());
+            full_repaint = true;
+        } else if (palette.is_open()) {
             // modal: the palette takes every key; Master closes it again
             if (event_id(*event) == master_key) {
                 palette.close();
