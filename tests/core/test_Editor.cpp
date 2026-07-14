@@ -95,6 +95,27 @@ TEST_CASE("core::apply_editing_key home, end and paging") {
     CHECK_EQ(s.pane.cursor().line, 0u);
 }
 
+TEST_CASE("core::apply_editing_key on a read-only pane navigates but never mutates") {
+    Setup s { "hello\nworld" };
+    s.pane.set_read_only(true);
+
+    CHECK_FALSE(s.key(Key::character, "X"));
+    CHECK_FALSE(s.key(Key::enter));
+    CHECK_FALSE(s.key(Key::backspace));
+    CHECK_FALSE(s.key(Key::del));
+    CHECK_EQ(s.buffer->line(0), "hello");
+    CHECK_EQ(s.buffer->line_count(), 2u);
+
+    CHECK(s.key(Key::right, {}, true)); // selecting still works
+    CHECK(s.pane.selection().has_value());
+    CHECK_FALSE(s.key(Key::del, {}, true)); // shift-delete: no cut either
+    CHECK_EQ(s.clipboard, "");
+    CHECK_EQ(s.buffer->line(0), "hello");
+
+    CHECK(s.key(Key::down)); // plain movement still works
+    CHECK_EQ(s.pane.cursor().line, 1u);
+}
+
 TEST_CASE("core::apply_editing_key rejects what the buffer rejects") {
     auto log { std::make_shared<Buffer>("l", BufferCapability::append_only, "ro") };
     Pane pane { PaneType::grid, log };

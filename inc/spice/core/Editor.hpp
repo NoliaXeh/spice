@@ -17,7 +17,9 @@ namespace spice::core {
 //!   page jump, usually the pane's content height);
 //! - SHIFT + movement extends a selection, plain movement drops it, ESCAPE
 //!   clears it; typing and ENTER replace the selection, BACKSPACE/DELETE
-//!   remove it, SHIFT-DELETE cuts it into `clipboard`.
+//!   remove it, SHIFT-DELETE cuts it into `clipboard`;
+//! - on a read-only pane every mutation is rejected, while movement and
+//!   selection keep working.
 //!
 //! Returns true when anything changed (buffer, cursor or selection).
 auto apply_editing_key(

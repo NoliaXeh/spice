@@ -102,7 +102,9 @@ auto Spice::open_float(PaneType type, std::shared_ptr<Buffer> buffer, Rectangle 
 
 auto Spice::open_welcome_pane() -> uint32_t {
     auto buffer { create_buffer("Welcome", BufferCapability::editable, welcome_text) };
-    return open_pane(PaneType::edit, std::move(buffer));
+    uint32_t const id { open_pane(PaneType::edit, std::move(buffer)) };
+    pane(id)->set_read_only(true); // a greeting, not a scratchpad
+    return id;
 }
 
 auto Spice::open_pty_pane(std::vector<std::string> const& argv) -> uint32_t {

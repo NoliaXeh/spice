@@ -35,6 +35,13 @@ public:
     auto cursor() const -> Position;
     auto set_cursor(Position position) -> void;
 
+    //! A read-only pane rejects edits made through it (the editing engine
+    //! and clipboard commands check this) while cursor, selection and
+    //! copying keep working. It is a property of the view: the buffer may
+    //! still change through another pane. Shown as [ro] in the title.
+    auto read_only() const -> bool;
+    auto set_read_only(bool read_only) -> void;
+
     //! Selection: the range between an anchor and the cursor. Set the
     //! anchor where selecting starts (shift-move, mouse press); it stays
     //! put while the cursor extends the range. No anchor - or anchor equal
@@ -70,6 +77,7 @@ private:
 
     PaneType _type;
     std::shared_ptr<Buffer> _buffer;
+    bool _read_only { false };
     Position _cursor { 0, 0, 0 };
     Position _scroll { 0, 0, 0 };
     std::optional<Position> _anchor;

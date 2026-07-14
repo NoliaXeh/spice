@@ -30,6 +30,7 @@ TEST_CASE("core::Spice opens the Welcome pane on request") {
     CHECK_EQ(session.focused_id(), id);
     REQUIRE_NE(session.focused_pane(), nullptr);
     CHECK_EQ(session.focused_pane()->buffer()->name(), "Welcome");
+    CHECK(session.focused_pane()->read_only()); // a greeting, not a scratchpad
     CHECK_EQ(session.pane_area(id), core::Rectangle { { 0, 0, 0 }, 80, 24 });
 }
 

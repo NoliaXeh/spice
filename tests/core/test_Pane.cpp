@@ -151,6 +151,21 @@ TEST_CASE("core::Pane draws the selection with the selection colors") {
     CHECK_EQ(grid.background_at({ 1, 4, 0 }), theme.color(Theme::Usage::background)); // second 'l'
 }
 
+TEST_CASE("core::Pane read-only flag shows [ro] in the title") {
+    Grid grid { 16, 4 };
+    Theme const theme;
+    Pane pane { PaneType::edit, make_buffer("x") };
+    CHECK_FALSE(pane.read_only());
+
+    pane.set_read_only(true);
+    pane.draw(grid, { { 0, 0, 0 }, 16, 4 }, false, theme);
+    // title: ┌─buf [ro]─...
+    CHECK_EQ(grid.char_at({ 0, 6, 0 }), "[");
+    CHECK_EQ(grid.char_at({ 0, 7, 0 }), "r");
+    CHECK_EQ(grid.char_at({ 0, 8, 0 }), "o");
+    CHECK_EQ(grid.char_at({ 0, 9, 0 }), "]");
+}
+
 TEST_CASE("core::Pane tiny areas draw nothing and stay safe") {
     Grid grid { 4, 4 };
     Theme const theme;

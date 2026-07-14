@@ -49,6 +49,14 @@ auto Pane::set_cursor(Position position) -> void {
     _cursor = clamp(position);
 }
 
+auto Pane::read_only() const -> bool {
+    return _read_only;
+}
+
+auto Pane::set_read_only(bool read_only) -> void {
+    _read_only = read_only;
+}
+
 auto Pane::set_anchor(Position position) -> void {
     _anchor = clamp(position);
 }
@@ -141,11 +149,14 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     uint32_t const left { area.position.column };
     uint32_t const right { area.position.column + area.width - 1 };
 
-    // border with the buffer's name as title (a trailing * marks unsaved
-    // edits on editable buffers): ┌ name * ───┐
+    // border with the buffer's name as title; a trailing * marks unsaved
+    // edits on editable buffers, [ro] a read-only pane: ┌ name * [ro] ──┐
     std::string title { _buffer->name() };
     if (_buffer->capability() == BufferCapability::editable && _buffer->dirty()) {
         title += " *";
+    }
+    if (_read_only) {
+        title += " [ro]";
     }
     std::string_view const name { title };
     for (uint32_t column { left }; column <= right; ++column) {

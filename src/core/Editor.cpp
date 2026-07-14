@@ -30,6 +30,20 @@ auto apply_editing_key(
 ) -> bool {
     auto& buffer { *pane.buffer() };
 
+    // a read-only pane still navigates and selects, but never mutates
+    // (not even shift-delete's cut)
+    if (pane.read_only()) {
+        switch (key.key) {
+        case Key::character:
+        case Key::enter:
+        case Key::backspace:
+        case Key::del:
+            return false;
+        default:
+            break;
+        }
+    }
+
     // shift + movement extends a selection from the current spot; plain
     // movement drops it
     if (is_movement(key.key)) {
