@@ -119,6 +119,12 @@ sequence is half-read it polls with a short 25 ms timeout instead of the caller'
 timeout calls `flush()`, which resolves a lone ESC to `Key::escape` and discards unfinishable
 fragments.
 
+Two small companions round the event types out: `EventText.hpp` names events - `event_id()`
+gives the position-independent identity string binding maps key on ("C-'w'", "S-up",
+"press left"), `describe()` the human-readable log line - and `KeyBytes.hpp` goes the other
+way, `key_to_bytes()` turning a KeyEvent back into the bytes a terminal would send
+(EventParser's inverse), which is how keystrokes are forwarded into PTY panes.
+
 `EventReader` (EventReader.cpp) is the only class touching stdin state. Constructor: if stdin
 is a tty, save termios, `cfmakeraw`, enable mouse reporting. Destructor restores both, so the
 shell gets its terminal back even on quit. `poll(timeout_ms)` loops: poll stdin → read up to
@@ -175,6 +181,12 @@ after the title of editable buffers. The disk side lives in FileIo.hpp (`read_fi
 `write_file`, `std::fstream`-based; write joins lines with a trailing POSIX newline, read
 strips it) - free functions because file IO ultimately belongs to the Files plugin (README),
 and these will become its backend.
+
+The editing engine itself is `Editor.hpp`: `apply_editing_key()` maps one key onto a pane -
+characters insert (replacing any selection), ENTER splits, BACKSPACE/DELETE remove or join,
+movement keys travel (SHIFT extends the selection, ESCAPE clears it, SHIFT-DELETE cuts) - all
+through the capability-checked Buffer API. It lives in core because the README does ("editing
+lives in the core, not in plugins") and so it is unit-tested like everything else.
 
 Buffers own their undo history (the README puts undo in the core, and history belongs to the
 content, not the view - two panes sharing a buffer share its history). Every successful edit
@@ -254,6 +266,12 @@ Master toggles it closed again.
 
 ## main.cpp: wiring it together
 
+main.cpp is the composition root: one `App` class owning the session, command registry,
+palette, clipboard and render state, with a documented method per concern (commands,
+bindings, click/drag handling, palette routing, repaint). Nothing algorithmic lives here -
+editing, event naming, key encoding and base64 all sit in core behind tests - the App only
+assembles and dispatches.
+
 Startup order matters: query `TermInfo` → build the session (Welcome pane + the event log, an
 append-only buffer in a floating grid pane at the bottom right) → enter the alternate screen →
 construct `EventReader` (raw mode) → first full repaint.
@@ -270,7 +288,7 @@ buffer through the capability-checked `Buffer` API. The same `event_id` feeds `d
 so the on-screen event log and the dispatcher share one naming scheme.
 
 When the focused pane is a PTY pane, unbound keys - modifiers included, so ctrl-c reaches the
-child - are translated back into terminal bytes (`key_to_bytes`) and written to its pty; the
+child - are translated back into terminal bytes (`key_to_bytes`, KeyBytes.hpp) and written to its pty; the
 output comes back through `pump_ptys()`, which runs every loop turn (event or 100 ms timeout)
 so shell output appears without user input.
 
