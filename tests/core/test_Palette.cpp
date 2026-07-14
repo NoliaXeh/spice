@@ -10,9 +10,9 @@ namespace {
 
 auto items() -> std::vector<Palette::Item> {
     return {
-        { "session.close", "Close Spice" },
-        { "pane.float", "Float pane" },
-        { "pane.close", "Close current pane" },
+        { "session.close", "Close Spice", {} },
+        { "pane.float", "Float pane", {} },
+        { "pane.close", "Close current pane", {} },
     };
 }
 
@@ -124,6 +124,44 @@ TEST_CASE("core::Palette::draw() paints title, query and highlighted selection")
     CHECK_EQ(selected_bg, theme.color(Theme::Usage::selection_background));
 }
 
+TEST_CASE("core::Palette::area() scales with the terminal") {
+    Rectangle const small { Palette::area({ { 0, 0, 0 }, 80, 24 }) };
+    CHECK_EQ(small.width, 48u);  // 60% of 80
+    CHECK_EQ(small.height, 14u); // 60% of 24
+
+    Rectangle const large { Palette::area({ { 0, 0, 0 }, 200, 60 }) };
+    CHECK_EQ(large.width, 100u); // capped
+    CHECK_EQ(large.height, 30u);
+
+    Rectangle const tiny { Palette::area({ { 0, 0, 0 }, 20, 6 }) };
+    CHECK_EQ(tiny.width, 20u);   // never larger than the screen
+    CHECK_EQ(tiny.height, 6u);
+}
+
+TEST_CASE("core::Palette::draw() shows shortcut hints right-aligned, discreetly") {
+    Palette palette;
+    palette.open({ { "session.close", "Close Spice", "ctrl-w" } });
+
+    Grid grid { 80, 24 };
+    Theme const theme;
+    Rectangle const screen { { 0, 0, 0 }, 80, 24 };
+    palette.draw(grid, screen, theme);
+
+    Rectangle const rect { Palette::area(screen) };
+    uint32_t const content_width { rect.width - 2 };
+    uint32_t const hint_start { rect.position.column + 1 + content_width - 6 - 1 };
+    uint32_t const row { rect.position.line + 2 };
+    CHECK_EQ(grid.char_at({ row, hint_start, 0 }), "c");
+    CHECK_EQ(grid.char_at({ row, hint_start + 5, 0 }), "w");
+    CHECK_EQ(grid.style_at({ row, hint_start, 0 }).r, theme.color(Theme::Usage::info).r);
+    // the title is untouched on the left, on the selection colors
+    CHECK_EQ(grid.char_at({ row, rect.position.column + 2, 0 }), "C");
+    CHECK_EQ(
+        grid.background_at({ row, hint_start, 0 }),
+        theme.color(Theme::Usage::selection_background)
+    );
+}
+
 TEST_CASE("core::Palette input mode picks the typed text") {
     Palette palette;
     palette.open_input("Open file");
@@ -143,10 +181,10 @@ TEST_CASE("core::Palette picker mode recomputes items from the query") {
     palette.open_picker("Open file", [](std::string const& query) {
         std::vector<Palette::Item> items;
         if (query.empty()) {
-            items.push_back({ "a", "a" });
-            items.push_back({ "b", "b" });
+            items.push_back({ "a", "a", {} });
+            items.push_back({ "b", "b", {} });
         } else if (query == "x") {
-            items.push_back({ "x-match", "x-match" });
+            items.push_back({ "x-match", "x-match", {} });
         }
         return items;
     });
@@ -175,7 +213,7 @@ TEST_CASE("core::Palette picker with nothing listed picks the typed text") {
 TEST_CASE("core::Palette::set_query() re-runs a picker's source") {
     Palette palette;
     palette.open_picker("Open file", [](std::string const& query) {
-        return std::vector<Palette::Item> { { query + "!", query + "!" } };
+        return std::vector<Palette::Item> { { query + "!", query + "!", {} } };
     });
     palette.set_query("dir/");
     CHECK_EQ(palette.query(), "dir/");

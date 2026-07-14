@@ -15,8 +15,18 @@ constexpr std::string_view commands_title { "Commands" };
 constexpr std::string_view prompt { "> " };
 constexpr std::string_view no_match { "(no matching command)" };
 
-constexpr uint32_t max_width { 50 };
-constexpr uint32_t max_height { 14 };
+//! The palette takes about this share of each screen axis...
+constexpr uint32_t scale_percent { 60 };
+//! ...within these bounds.
+constexpr uint32_t min_width { 30 };
+constexpr uint32_t max_width { 100 };
+constexpr uint32_t min_height { 8 };
+constexpr uint32_t max_height { 30 };
+
+auto scaled(uint32_t total, uint32_t minimum, uint32_t maximum) -> uint32_t {
+    uint32_t const share { total * scale_percent / 100 };
+    return std::min(std::clamp(share, minimum, maximum), total);
+}
 
 auto lowered(std::string_view text) -> std::string {
     std::string out { text };
@@ -203,8 +213,8 @@ auto Palette::selected_name() const -> std::string {
 }
 
 auto Palette::area(Rectangle screen) -> Rectangle {
-    uint32_t const width { screen.width < max_width ? screen.width : max_width };
-    uint32_t const height { screen.height < max_height ? screen.height : max_height };
+    uint32_t const width { scaled(screen.width, min_width, max_width) };
+    uint32_t const height { scaled(screen.height, min_height, max_height) };
     return {
         {
             screen.position.line + (screen.height - height) / 2,
@@ -284,11 +294,25 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
             );
         } else if (index < _filtered.size()) {
             bool const selected { index == _selected };
+            Item const& item { _filtered[index] };
+            Color const row_background { selected ? selection_background : background };
             paint_row(
-                grid, origin, content_width, " " + _filtered[index].title,
-                selected ? selection_text : text,
-                selected ? selection_background : background
+                grid, origin, content_width, " " + item.title,
+                selected ? selection_text : text, row_background
             );
+            // the hint (a key shortcut) sits right-aligned, discreetly
+            uint32_t const hint_size { static_cast<uint32_t>(item.hint.size()) };
+            if (!item.hint.empty()
+                && item.title.size() + hint_size + 4 <= content_width) {
+                uint32_t const start { content_width - hint_size - 1 };
+                for (uint32_t i { 0 }; i < hint_size; ++i) {
+                    paint_cell(
+                        grid, { origin.line, origin.column + start + i, 0 },
+                        std::string_view(item.hint).substr(i, 1),
+                        info, row_background
+                    );
+                }
+            }
         } else {
             paint_row(grid, origin, content_width, "", text, background);
         }

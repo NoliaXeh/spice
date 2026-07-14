@@ -22,6 +22,8 @@ public:
     struct Item {
         std::string name;  //!< command name, returned by selected_name()
         std::string title; //!< what is listed and filtered on
+        std::string hint;  //!< right-aligned, discreetly colored extra
+                           //!< (a key shortcut); often empty
     };
 
     //! What a key did, so the caller knows how to react.
@@ -65,7 +67,8 @@ public:
     //! The picked/selected command name; empty when nothing matches.
     auto selected_name() const -> std::string;
 
-    //! Where the palette sits on `screen`: centered, capped size.
+    //! Where the palette sits on `screen`: centered, scaling with the
+    //! terminal (about 3/5 of each axis, within sane bounds).
     static auto area(Rectangle screen) -> Rectangle;
 
     //! Paints the palette into the grid (border, query line, list with the
