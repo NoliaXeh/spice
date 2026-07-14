@@ -169,28 +169,119 @@ auto key_to_bytes(core::KeyEvent const& key) -> std::string {
 // Editing on the focused pane
 // ---------------------------------------------------------------
 
+//! Standard base64, for pushing the clipboard to the terminal via OSC 52.
+auto base64(std::string_view input) -> std::string {
+    constexpr std::string_view table {
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    };
+    std::string out;
+    out.reserve((input.size() + 2) / 3 * 4);
+
+    size_t i { 0 };
+    for (; i + 3 <= input.size(); i += 3) {
+        uint32_t const n {
+            static_cast<uint32_t>(static_cast<unsigned char>(input[i])) << 16
+            | static_cast<uint32_t>(static_cast<unsigned char>(input[i + 1])) << 8
+            | static_cast<uint32_t>(static_cast<unsigned char>(input[i + 2]))
+        };
+        out += table[n >> 18];
+        out += table[(n >> 12) & 63];
+        out += table[(n >> 6) & 63];
+        out += table[n & 63];
+    }
+    if (input.size() - i == 1) {
+        uint32_t const n { static_cast<uint32_t>(static_cast<unsigned char>(input[i])) << 16 };
+        out += table[n >> 18];
+        out += table[(n >> 12) & 63];
+        out += "==";
+    } else if (input.size() - i == 2) {
+        uint32_t const n {
+            static_cast<uint32_t>(static_cast<unsigned char>(input[i])) << 16
+            | static_cast<uint32_t>(static_cast<unsigned char>(input[i + 1])) << 8
+        };
+        out += table[n >> 18];
+        out += table[(n >> 12) & 63];
+        out += table[(n >> 6) & 63];
+        out += '=';
+    }
+    return out;
+}
+
+//! True for keys that move the cursor (and so extend or drop a selection).
+auto is_movement(core::Key key) -> bool {
+    switch (key) {
+        case core::Key::up:
+        case core::Key::down:
+        case core::Key::left:
+        case core::Key::right:
+        case core::Key::home:
+        case core::Key::end:
+        case core::Key::page_up:
+        case core::Key::page_down:
+            return true;
+        default:
+            return false;
+    }
+}
+
 //! Applies an editing key to a pane; returns true if it did anything.
-//! `page` is how many lines page-up/down jump (the pane's content height).
-auto edit_pane(core::Pane& pane, core::KeyEvent const& key, uint32_t page) -> bool {
+//! `page` is how many lines page-up/down jump (the pane's content height);
+//! `clipboard` receives cut text (shift-delete).
+auto edit_pane(
+    core::Pane& pane, core::KeyEvent const& key, uint32_t page, std::string& clipboard
+) -> bool {
     auto& buffer { *pane.buffer() };
+
+    // shift + movement extends a selection from the current spot; plain
+    // movement drops it
+    if (is_movement(key.key)) {
+        if (key.mods.shift) {
+            if (!pane.has_anchor()) {
+                pane.set_anchor(pane.cursor());
+            }
+        } else {
+            pane.clear_anchor();
+        }
+    }
+
+    //! Removes the selected range (one undo step); cursor lands at its start.
+    auto const erase_selection = [&]() -> bool {
+        auto const range { pane.selection() };
+        if (!range || !buffer.erase_range(range->first, range->second)) {
+            return false;
+        }
+        pane.set_cursor(range->first);
+        pane.clear_anchor();
+        return true;
+    };
+
     Position const cursor { pane.cursor() };
 
     switch (key.key) {
-    case core::Key::character:
-        if (buffer.insert(cursor, key.text)) {
-            pane.set_cursor({ cursor.line, cursor.column + 1, 0 });
+    case core::Key::character: {
+        erase_selection(); // typing replaces the selection
+        Position const at { pane.cursor() };
+        if (buffer.insert(at, key.text)) {
+            pane.set_cursor({ at.line, at.column + 1, 0 });
             return true;
         }
         return false;
+    }
 
-    case core::Key::enter:
-        if (buffer.split_line(cursor)) {
-            pane.set_cursor({ cursor.line + 1, 0, 0 });
+    case core::Key::enter: {
+        erase_selection();
+        Position const at { pane.cursor() };
+        if (buffer.split_line(at)) {
+            pane.set_cursor({ at.line + 1, 0, 0 });
             return true;
         }
         return false;
+    }
 
     case core::Key::backspace:
+        if (erase_selection()) {
+            return true;
+        }
         if (cursor.column > 0) {
             if (buffer.erase({ cursor.line, cursor.column - 1, 0 })) {
                 pane.set_cursor({ cursor.line, cursor.column - 1, 0 });
@@ -206,7 +297,19 @@ auto edit_pane(core::Pane& pane, core::KeyEvent const& key, uint32_t page) -> bo
         return false;
 
     case core::Key::del:
+        if (key.mods.shift) { // shift-delete: cut
+            if (auto const range { pane.selection() }) {
+                clipboard = buffer.text_between(range->first, range->second);
+            }
+        }
+        if (erase_selection()) {
+            return true;
+        }
         return buffer.erase(cursor);
+
+    case core::Key::escape:
+        pane.clear_anchor();
+        return true;
 
     case core::Key::left:
         if (cursor.column > 0) {
@@ -451,6 +554,54 @@ int main() {
         open_prompt("Save as", save_focused_to);
     } });
 
+    // ---------------------------------------------------------------
+    // Clipboard. Copies also go to the system clipboard via OSC 52
+    // (write-only; terminals that support it pick it up).
+    // ---------------------------------------------------------------
+
+    std::string clipboard;
+
+    auto const push_system_clipboard = [&](std::string const& text) {
+        std::print("\x1b]52;c;{}\x07", base64(text));
+        std::fflush(stdout);
+    };
+
+    registry.add({ "edit.copy", "Copy selection", [&] {
+        if (auto* pane { session.focused_pane() }) {
+            if (auto const range { pane->selection() }) {
+                clipboard = pane->buffer()->text_between(range->first, range->second);
+                push_system_clipboard(clipboard);
+            }
+        }
+    } });
+    registry.add({ "edit.cut", "Cut selection", [&] {
+        if (auto* pane { session.focused_pane() }) {
+            if (auto const range { pane->selection() }) {
+                clipboard = pane->buffer()->text_between(range->first, range->second);
+                push_system_clipboard(clipboard);
+                if (pane->buffer()->erase_range(range->first, range->second)) {
+                    pane->set_cursor(range->first);
+                    pane->clear_anchor();
+                }
+            }
+        }
+    } });
+    registry.add({ "edit.paste", "Paste", [&] {
+        auto* pane { session.focused_pane() };
+        if (pane == nullptr || clipboard.empty()) {
+            return;
+        }
+        if (auto const range { pane->selection() }) { // paste replaces it
+            if (pane->buffer()->erase_range(range->first, range->second)) {
+                pane->set_cursor(range->first);
+                pane->clear_anchor();
+            }
+        }
+        if (auto const end { pane->buffer()->insert_block(pane->cursor(), clipboard) }) {
+            pane->set_cursor(*end);
+        }
+    } });
+
     registry.add({ "buffer.undo", "Undo", [&] {
         if (auto* pane { session.focused_pane() }) {
             if (auto const position { pane->buffer()->undo() }) {
@@ -520,10 +671,13 @@ int main() {
         mark_focused(); // new pane gains it
     };
 
-    //! An in-progress mouse drag: a pane grabbed by its border. Floats
-    //! follow the pointer; docked panes swap with the tile they drop on.
+    //! An in-progress mouse drag. Grabbed by the border, a pane moves:
+    //! floats follow the pointer, docked panes swap with the drop target.
+    //! Grabbed by the content, the drag selects text under the cursor.
     struct Drag {
+        enum class Kind : uint8_t { pane, text };
         bool active { false };
+        Kind kind { Kind::pane };
         uint32_t pane { 0 };
         uint32_t grab_line { 0 };   //!< press offset inside the pane
         uint32_t grab_column { 0 };
@@ -538,14 +692,19 @@ int main() {
             if (auto* pane { session.pane(*id) }) {
                 if (auto const area { session.pane_area(*id) }) {
                     if (!core::Pane::content_area(*area).contains(point)) {
-                        // grabbed by the border: start dragging
+                        // grabbed by the border: start moving the pane
                         drag = Drag {
-                            true, *id,
+                            true, Drag::Kind::pane, *id,
                             point.line - area->position.line,
                             point.column - area->position.column,
                         };
                     } else {
+                        // content press: place the cursor and arm text
+                        // selection (it materializes once the drag moves)
                         pane->set_cursor(pane->position_from_screen(*area, point));
+                        pane->clear_anchor();
+                        pane->set_anchor(pane->cursor());
+                        drag = Drag { true, Drag::Kind::text, *id, 0, 0 };
                     }
                 }
             }
@@ -554,29 +713,39 @@ int main() {
     };
 
     auto const drag_update = [&](core::MouseEvent const& mouse) {
-        if (mouse.action == core::MouseAction::move && session.is_floating(drag.pane)) {
-            // a float follows the pointer, keeping the grab point under it
-            if (auto const area { session.pane_area(drag.pane) }) {
-                damage.push_back(*area); // reveal what it uncovers
-                long line { static_cast<long>(mouse.position.line) - drag.grab_line };
-                long column { static_cast<long>(mouse.position.column) - drag.grab_column };
-                long const max_line { static_cast<long>(screen.height) - 2 };
-                long const max_column { static_cast<long>(screen.width) - 2 };
-                if (line < 0) line = 0;
-                if (line > max_line) line = max_line;
-                if (column < 0) column = 0;
-                if (column > max_column) column = max_column;
+        if (mouse.action == core::MouseAction::move) {
+            if (drag.kind == Drag::Kind::text) {
+                // extend the selection to the cell under the pointer
+                if (auto* pane { session.pane(drag.pane) }) {
+                    if (auto const area { session.pane_area(drag.pane) }) {
+                        pane->set_cursor(pane->position_from_screen(*area, mouse.position));
+                        damage.push_back(*area);
+                    }
+                }
+            } else if (session.is_floating(drag.pane)) {
+                // a float follows the pointer, keeping the grab point under it
+                if (auto const area { session.pane_area(drag.pane) }) {
+                    damage.push_back(*area); // reveal what it uncovers
+                    long line { static_cast<long>(mouse.position.line) - drag.grab_line };
+                    long column { static_cast<long>(mouse.position.column) - drag.grab_column };
+                    long const max_line { static_cast<long>(screen.height) - 2 };
+                    long const max_column { static_cast<long>(screen.width) - 2 };
+                    if (line < 0) line = 0;
+                    if (line > max_line) line = max_line;
+                    if (column < 0) column = 0;
+                    if (column > max_column) column = max_column;
 
-                Rectangle const moved {
-                    { static_cast<uint32_t>(line), static_cast<uint32_t>(column), 0 },
-                    area->width,
-                    area->height,
-                };
-                session.move_float(drag.pane, moved);
-                damage.push_back(moved);
+                    Rectangle const moved {
+                        { static_cast<uint32_t>(line), static_cast<uint32_t>(column), 0 },
+                        area->width,
+                        area->height,
+                    };
+                    session.move_float(drag.pane, moved);
+                    damage.push_back(moved);
+                }
             }
         } else if (mouse.action == core::MouseAction::release) {
-            if (!session.is_floating(drag.pane)) {
+            if (drag.kind == Drag::Kind::pane && !session.is_floating(drag.pane)) {
                 // a docked pane swaps with whatever it is dropped on
                 if (auto const target { session.pane_at(mouse.position) };
                     target && *target != drag.pane) {
@@ -610,6 +779,24 @@ int main() {
         { "C-'y'", [&](auto const&) { registry.run("buffer.redo"); mark_focused(); } },
         { "C-'s'", [&](auto const&) { run_command("file.save"); } },
         { "C-'o'", [&](auto const&) { run_command("file.open"); } },
+        // copy/paste in edit panes; PTY panes still get the control bytes
+        { "C-'c'", [&](auto const&) {
+            if (auto* pane { session.focused_pane() };
+                pane != nullptr && pane->type() == core::PaneType::pty) {
+                session.write_to_pty(session.focused_id(), "\x03");
+            } else {
+                registry.run("edit.copy");
+            }
+        } },
+        { "C-'v'", [&](auto const&) {
+            if (auto* pane { session.focused_pane() };
+                pane != nullptr && pane->type() == core::PaneType::pty) {
+                session.write_to_pty(session.focused_id(), "\x16");
+            } else {
+                registry.run("edit.paste");
+                mark_focused();
+            }
+        } },
         { "C-up", [&](auto const&) { move_focus(core::Direction::up); } },
         { "C-down", [&](auto const&) { move_focus(core::Direction::down); } },
         { "C-left", [&](auto const&) { move_focus(core::Direction::left); } },
@@ -713,7 +900,7 @@ int main() {
                     uint32_t const height { core::Pane::content_area(*area).height };
                     page = height > 0 ? height : 1;
                 }
-                if (edit_pane(*pane, event->key, page)) {
+                if (edit_pane(*pane, event->key, page, clipboard)) {
                     mark_focused();
                 }
             }
