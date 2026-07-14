@@ -60,6 +60,7 @@ auto Palette::open(std::vector<Item> items) -> void {
     std::ranges::sort(_items, {}, &Item::title);
     _title = commands_title;
     _input = false;
+    _source = nullptr;
     _query.clear();
     _selected = 0;
     _scroll = 0;
@@ -71,6 +72,21 @@ auto Palette::open_input(std::string title) -> void {
     _items.clear();
     _title = std::move(title);
     _input = true;
+    _source = nullptr;
+    _query.clear();
+    _selected = 0;
+    _scroll = 0;
+    _open = true;
+    refilter();
+}
+
+auto Palette::open_picker(
+    std::string title, std::function<std::vector<Item>(std::string const&)> source
+) -> void {
+    _items.clear();
+    _title = std::move(title);
+    _input = false;
+    _source = std::move(source);
     _query.clear();
     _selected = 0;
     _scroll = 0;
@@ -82,6 +98,15 @@ auto Palette::is_input() const -> bool {
     return _input;
 }
 
+auto Palette::is_picker() const -> bool {
+    return _source != nullptr;
+}
+
+auto Palette::set_query(std::string query) -> void {
+    _query = std::move(query);
+    refilter();
+}
+
 auto Palette::close() -> void {
     _open = false;
 }
@@ -91,11 +116,15 @@ auto Palette::is_open() const -> bool {
 }
 
 auto Palette::refilter() -> void {
-    auto const query_lower { lowered(_query) };
-    _filtered.clear();
-    for (Item const& item : _items) {
-        if (query_lower.empty() || matches(item.title, query_lower)) {
-            _filtered.push_back(item);
+    if (_source) { // picker: the source computes the list for this query
+        _filtered = _source(_query);
+    } else {
+        auto const query_lower { lowered(_query) };
+        _filtered.clear();
+        for (Item const& item : _items) {
+            if (query_lower.empty() || matches(item.title, query_lower)) {
+                _filtered.push_back(item);
+            }
         }
     }
     _selected = 0;
@@ -137,7 +166,9 @@ auto Palette::handle(KeyEvent const& key) -> Outcome {
         return Outcome::updated;
 
     case Key::enter:
-        if (!_input && _filtered.empty()) {
+        // a picker with nothing listed still picks: the typed text stands
+        // for itself (selected_name() is empty, callers use query())
+        if (!_input && !is_picker() && _filtered.empty()) {
             return Outcome::ignored;
         }
         _open = false;
@@ -246,7 +277,11 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
         size_t const index { _scroll + row };
 
         if (!_input && _filtered.empty() && row == 0) {
-            paint_row(grid, origin, content_width, no_match, info, background);
+            paint_row(
+                grid, origin, content_width,
+                is_picker() ? "(RETURN takes the typed text)" : no_match,
+                info, background
+            );
         } else if (index < _filtered.size()) {
             bool const selected { index == _selected };
             paint_row(

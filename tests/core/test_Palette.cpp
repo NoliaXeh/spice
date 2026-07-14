@@ -138,6 +138,51 @@ TEST_CASE("core::Palette input mode picks the typed text") {
     CHECK_FALSE(palette.is_open());
 }
 
+TEST_CASE("core::Palette picker mode recomputes items from the query") {
+    Palette palette;
+    palette.open_picker("Open file", [](std::string const& query) {
+        std::vector<Palette::Item> items;
+        if (query.empty()) {
+            items.push_back({ "a", "a" });
+            items.push_back({ "b", "b" });
+        } else if (query == "x") {
+            items.push_back({ "x-match", "x-match" });
+        }
+        return items;
+    });
+    CHECK(palette.is_picker());
+    CHECK_FALSE(palette.is_input());
+    CHECK_EQ(palette.filtered().size(), 2u);
+
+    press(palette, Key::character, "x"); // the source, not a filter, decides
+    REQUIRE_EQ(palette.filtered().size(), 1u);
+    CHECK_EQ(palette.filtered()[0].name, "x-match");
+    CHECK_EQ(press(palette, Key::enter), Palette::Outcome::picked);
+    CHECK_EQ(palette.selected_name(), "x-match");
+}
+
+TEST_CASE("core::Palette picker with nothing listed picks the typed text") {
+    Palette palette;
+    palette.open_picker("Open file", [](std::string const&) {
+        return std::vector<Palette::Item> {};
+    });
+    press(palette, Key::character, "n");
+    CHECK_EQ(press(palette, Key::enter), Palette::Outcome::picked);
+    CHECK_EQ(palette.selected_name(), ""); // caller falls back to query()
+    CHECK_EQ(palette.query(), "n");
+}
+
+TEST_CASE("core::Palette::set_query() re-runs a picker's source") {
+    Palette palette;
+    palette.open_picker("Open file", [](std::string const& query) {
+        return std::vector<Palette::Item> { { query + "!", query + "!" } };
+    });
+    palette.set_query("dir/");
+    CHECK_EQ(palette.query(), "dir/");
+    REQUIRE_EQ(palette.filtered().size(), 1u);
+    CHECK_EQ(palette.filtered()[0].name, "dir/!");
+}
+
 TEST_CASE("core::Palette input mode escape cancels") {
     Palette palette;
     palette.open_input("Save as");

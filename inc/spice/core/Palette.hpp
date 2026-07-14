@@ -7,6 +7,7 @@
 #include "spice/core/Rectangle.hpp"
 #include "spice/core/Theme.hpp"
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,19 @@ public:
     auto open_input(std::string title) -> void;
     auto is_input() const -> bool;
 
+    //! Opens as a picker: `source` computes the items for the current query
+    //! and is re-run on every edit (the query is the source's input, not a
+    //! filter). RETURN picks the selection, or the typed text itself when
+    //! nothing is listed (selected_name() is then empty).
+    auto open_picker(
+        std::string title, std::function<std::vector<Item>(std::string const&)> source
+    ) -> void;
+    auto is_picker() const -> bool;
+
+    //! Replaces the query (re-running a picker's source) - used to prefill,
+    //! e.g. re-opening a path picker inside the directory just picked.
+    auto set_query(std::string query) -> void;
+
     auto close() -> void;
     auto is_open() const -> bool;
 
@@ -66,6 +80,7 @@ private:
 
     bool _open { false };
     bool _input { false };
+    std::function<std::vector<Item>(std::string const&)> _source; //!< picker mode when set
     std::string _title;
     std::vector<Item> _items;
     std::vector<Item> _filtered;
