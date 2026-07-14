@@ -202,7 +202,11 @@ state. `draw(grid, area, focused, theme)` paints a box-drawing border (`┌─�
 buffer's name as title, then the visible slice of the buffer. Edit panes auto-scroll to keep
 the cursor visible; grid/pty panes keep whatever scroll they were given (`scroll_to_bottom`
 for scrollback-style following). `position_from_screen` maps a click to a buffer position;
-`cursor_screen_position` maps the cursor back to a screen cell.
+`cursor_screen_position` maps the cursor back to a screen cell. A pane can be **read-only**
+(`set_read_only`, shown as `[ro]` in the title): mutations through it are rejected by the
+editing engine and the clipboard commands while cursor, selection and copying keep working.
+It is a view property, distinct from the buffer's capability - the Welcome pane is read-only
+over an editable buffer, and the event log and the list floats are flagged too.
 
 **`Layout`** (Layout.cpp) - where panes are, knowing only pane ids. Two structures, exactly as
 the README prescribes:
