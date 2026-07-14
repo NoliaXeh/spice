@@ -206,8 +206,9 @@ floats/docks the pane, `x` closes it (`float_button`/`close_button` expose their
 hit-testing; panes narrower than 12 cells show a bare bar) - then side borders with a
 **scrollbar thumb** once content overflows the view, a rounded `╰─╯` bottom, and the visible
 slice of the buffer, the (focused) cursor's line on a subtly lifted background. Floating
-panes and the palette cast a **drop shadow** (`drop_shadow` in Grid.hpp darkens the cells one
-row below / one column right, in place). Edit panes auto-scroll to keep
+panes and the palette call `drop_shadow` (Grid.hpp), which would darken the cells one row
+below / one column right in place - currently disabled at its source pending a nicer look.
+Edit panes auto-scroll to keep
 the cursor visible; grid/pty panes keep whatever scroll they were given (`scroll_to_bottom`
 for scrollback-style following). `position_from_screen` maps a click to a buffer position;
 `cursor_screen_position` maps the cursor back to a screen cell. A pane can be **read-only**
@@ -325,6 +326,12 @@ palette, clipboard and render state, with a documented method per concern (comma
 bindings, click/drag handling, palette routing, repaint). Nothing algorithmic lives here -
 editing, event naming, key encoding and base64 all sit in core behind tests - the App only
 assembles and dispatches.
+
+The command line: `spice [options] [file...]`. File arguments open straight into panes,
+taking the Welcome pane's place. `--help`, `--version` (from the CMake project version),
+`--config <file>` (use a specific config.toml), `--no-config` (built-in defaults, no files
+read) and `--list-commands` (print every command name and title - the reference for writing
+config.toml keybinds; works without a terminal). Bad options exit 2 with the usage.
 
 Startup order matters: query `TermInfo` → build the session (Welcome pane + the event log, an
 append-only buffer in a floating grid pane at the bottom right) → enter the alternate screen →
