@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <format>
 #include <functional>
+#include <optional>
 #include <print>
 #include <string>
 #include <string_view>
@@ -35,6 +36,10 @@
 #include "spice/core/TermInfo.hpp"
 #include "spice/core/Theme.hpp"
 
+#ifndef SPICE_VERSION
+#define SPICE_VERSION "dev"
+#endif
+
 namespace {
 
 using namespace spice;
@@ -42,6 +47,70 @@ using core::Grid;
 using core::Position;
 using core::Rectangle;
 using core::Theme;
+
+// ---------------------------------------------------------------
+// Command line
+// ---------------------------------------------------------------
+
+constexpr std::string_view usage_text {
+    "Usage: spice [options] [file...]\n"
+    "\n"
+    "The buffer manager made to match any taste.\n"
+    "\n"
+    "  file...              open these files in panes (instead of the Welcome pane)\n"
+    "\n"
+    "Options:\n"
+    "  -h, --help           show this help and exit\n"
+    "  -V, --version        print the version and exit\n"
+    "      --config <file>  use this config.toml instead of the XDG one\n"
+    "      --no-config      skip config files entirely, using built-in defaults\n"
+    "      --list-commands  print every command (for config.toml keybinds) and exit\n"
+};
+
+//! What the command line asked for. `error` set means it made no sense.
+struct Options {
+    bool help { false };
+    bool version { false };
+    bool list_commands { false };
+    bool no_config { false };
+    std::optional<std::string> config_file;
+    std::vector<std::string> files;
+    std::optional<std::string> error;
+};
+
+auto parse_options(int argc, char** argv) -> Options {
+    Options options;
+    bool only_files { false }; // set by "--"
+
+    for (int i { 1 }; i < argc; ++i) {
+        std::string_view const argument { argv[i] };
+        if (only_files || !argument.starts_with('-')) {
+            options.files.emplace_back(argument);
+        } else if (argument == "--") {
+            only_files = true;
+        } else if (argument == "-h" || argument == "--help") {
+            options.help = true;
+        } else if (argument == "-V" || argument == "--version") {
+            options.version = true;
+        } else if (argument == "--list-commands") {
+            options.list_commands = true;
+        } else if (argument == "--no-config") {
+            options.no_config = true;
+        } else if (argument == "--config") {
+            if (i + 1 >= argc) {
+                options.error = "--config needs a file argument";
+                return options;
+            }
+            options.config_file = argv[++i];
+        } else if (argument.starts_with("--config=")) {
+            options.config_file = std::string(argument.substr(9));
+        } else {
+            options.error = std::format("unknown option '{}'", argument);
+            return options;
+        }
+    }
+    return options;
+}
 
 //! The built-in key bindings, as data so config keybinds can override any
 //! of them: config-style key name -> command. The Master key (configurable,
@@ -83,7 +152,7 @@ struct Drag {
 //! palette and the render state, and runs the event loop.
 class App {
 public:
-    App();
+    explicit App(Options const& options);
 
     //! False when there is no terminal to draw on.
     auto ready() const -> bool;
@@ -91,9 +160,13 @@ public:
     //! Enters the alternate screen and runs the event loop until quit.
     auto run() -> void;
 
+    //! Prints every registered command, for --list-commands (works without
+    //! a terminal: commands are registered on demand).
+    auto print_commands() -> void;
+
 private:
     // -- startup ----------------------------------------------------
-    auto open_startup_panes() -> void;
+    auto open_startup_panes(std::vector<std::string> const& files) -> void;
     auto register_commands() -> void;
     auto make_bindings() -> void;
 
@@ -188,20 +261,26 @@ private:
 
 // -- startup ---------------------------------------------------------
 
-App::App()
+App::App(Options const& options)
     : _screen { { 0, 0, 0 }, _terminfo.width(), _terminfo.height() }
     , _grid { _terminfo.width(), _terminfo.height() }
 {
     if (!ready()) {
         return;
     }
-    _config = config::load();
+    if (options.no_config) {
+        _config = config::Config {}; // built-in defaults, no files read
+    } else if (options.config_file) {
+        _config = config::load(*options.config_file, config::keybinds_file_path());
+    } else {
+        _config = config::load();
+    }
     _master_id = config::parse_key(_config.master).value_or("C-' '");
     _palette_run_id = config::parse_key(_config.palette_run).value_or("enter");
     _palette_bind_id = config::parse_key(_config.palette_bind).value_or("S-enter");
 
     _session.set_screen(_screen);
-    open_startup_panes();
+    open_startup_panes(options.files);
     register_commands();
     make_bindings();
 
@@ -214,8 +293,25 @@ auto App::ready() const -> bool {
     return _screen.width > 0 && _screen.height > 0;
 }
 
-auto App::open_startup_panes() -> void {
-    uint32_t const welcome { _session.open_welcome_pane() };
+auto App::print_commands() -> void {
+    if (_registry.commands().empty()) {
+        register_commands(); // enumeration needs no terminal
+    }
+    for (auto const& command : _registry.commands()) {
+        std::println("{:<24} {}", command.name, command.title);
+    }
+}
+
+auto App::open_startup_panes(std::vector<std::string> const& files) -> void {
+    // files from the command line take the Welcome pane's place
+    if (files.empty()) {
+        _session.open_welcome_pane();
+    } else {
+        for (auto const& file : files) {
+            open_file(file);
+        }
+    }
+    uint32_t const first { _session.focused_id() };
 
     // the event log: an append-only buffer in a floating grid pane,
     // bottom-right, on top of the split tree
@@ -224,7 +320,7 @@ auto App::open_startup_panes() -> void {
     );
     _log_pane = _session.open_float(core::PaneType::grid, _log_buffer, log_rect());
     _session.pane(_log_pane)->set_read_only(true);
-    _session.focus(welcome);
+    _session.focus(first);
 }
 
 auto App::register_commands() -> void {
@@ -883,8 +979,27 @@ auto App::run() -> void {
 
 }
 
-int main() {
-    App app;
+int main(int argc, char** argv) {
+    auto const options { parse_options(argc, argv) };
+    if (options.error) {
+        std::println(stderr, "spice: {}", *options.error);
+        std::print(stderr, "{}", usage_text);
+        return 2;
+    }
+    if (options.help) {
+        std::print("{}", usage_text);
+        return 0;
+    }
+    if (options.version) {
+        std::println("spice {}", SPICE_VERSION);
+        return 0;
+    }
+
+    App app { options };
+    if (options.list_commands) {
+        app.print_commands();
+        return 0;
+    }
     if (!app.ready()) {
         std::println("spice: no terminal to draw on");
         return 1;
