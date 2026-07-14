@@ -584,8 +584,20 @@ auto App::on_click(core::Event const& event) -> void {
     _session.focus(*id);
     if (auto* pane { _session.pane(*id) }) {
         if (auto const area { _session.pane_area(*id) }) {
-            if (!core::Pane::content_area(*area).contains(point)) {
-                // grabbed by the border: start moving the pane
+            if (core::Pane::close_button(*area).contains(point)) {
+                // the x button closes the pane
+                _registry.run("pane.close");
+                _full_repaint = true;
+            } else if (core::Pane::float_button(*area).contains(point)) {
+                // the F button floats a tiled pane (and docks a floating one)
+                if (_session.is_floating(*id)) {
+                    _session.dock_focused();
+                } else {
+                    _session.float_focused();
+                }
+                _full_repaint = true;
+            } else if (!core::Pane::content_area(*area).contains(point)) {
+                // grabbed by the bar or a border: start moving the pane
                 _drag = Drag {
                     true, Drag::Kind::pane, *id,
                     point.line - area->position.line,
