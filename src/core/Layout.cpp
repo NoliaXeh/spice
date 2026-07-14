@@ -5,10 +5,12 @@
 
 namespace spice::core {
 
-//! A leaf holds a pane; a split holds two children and an orientation.
+//! A leaf holds a pane; a split holds two children, an orientation and the
+//! ratio of the space its first child takes (resizing adjusts it).
 struct Layout::Node {
     uint32_t pane {};             //!< meaningful for leaves
     bool horizontal {};           //!< split orientation: children side by side
+    float ratio { 0.5f };         //!< the first child's share of the split
     std::unique_ptr<Node> first;  //!< non-null means this is a split
     std::unique_ptr<Node> second;
 
@@ -17,11 +19,28 @@ struct Layout::Node {
 
 namespace {
 
-//! The two rectangles a split node divides `rect` into. The first child
-//! gets the first half, the second child the rest, covering rect exactly.
-auto split_rect(Rectangle rect, bool horizontal) -> std::pair<Rectangle, Rectangle> {
+//! Panes never shrink below this many cells on either axis.
+constexpr uint32_t min_pane_cells { 3 };
+
+auto has_leaf(Layout::Node const* node, uint32_t pane) -> bool;
+
+//! The first child's share of `total` cells, clamped so both sides keep at
+//! least the minimum (when there is room for it).
+auto first_share(uint32_t total, float ratio) -> uint32_t {
+    auto first { static_cast<uint32_t>(static_cast<float>(total) * ratio + 0.5f) };
+    if (total >= 2 * min_pane_cells) {
+        first = std::clamp(first, min_pane_cells, total - min_pane_cells);
+    } else {
+        first = std::min(first, total);
+    }
+    return first;
+}
+
+//! The two rectangles a split node divides `rect` into, covering it exactly.
+auto split_rect(Rectangle rect, bool horizontal, float ratio)
+    -> std::pair<Rectangle, Rectangle> {
     if (horizontal) {
-        uint32_t const first_width { rect.width / 2 };
+        uint32_t const first_width { first_share(rect.width, ratio) };
         return {
             Rectangle { rect.position, first_width, rect.height },
             Rectangle {
@@ -30,7 +49,7 @@ auto split_rect(Rectangle rect, bool horizontal) -> std::pair<Rectangle, Rectang
             },
         };
     }
-    uint32_t const first_height { rect.height / 2 };
+    uint32_t const first_height { first_share(rect.height, ratio) };
     return {
         Rectangle { rect.position, rect.width, first_height },
         Rectangle {
@@ -61,9 +80,46 @@ auto collect_tiles(
         out.emplace_back(node->pane, rect);
         return;
     }
-    auto const [first, second] { split_rect(rect, node->horizontal) };
+    auto const [first, second] { split_rect(rect, node->horizontal, node->ratio) };
     collect_tiles(node->first.get(), first, out);
     collect_tiles(node->second.get(), second, out);
+}
+
+//! Adjusts the deepest split of `orientation` above `pane` so the pane's
+//! side changes by `delta` cells. Deepest, because that split's divider is
+//! the one adjacent to the pane - the divider the user means to move.
+auto resize_in_tree(
+    std::unique_ptr<Layout::Node> const& node, Rectangle rect,
+    uint32_t pane, bool horizontal, int delta
+) -> bool {
+    if (node == nullptr || node->is_leaf()) {
+        return false;
+    }
+    auto const [first_rect, second_rect] { split_rect(rect, node->horizontal, node->ratio) };
+    if (resize_in_tree(node->first, first_rect, pane, horizontal, delta)
+        || resize_in_tree(node->second, second_rect, pane, horizontal, delta)) {
+        return true;
+    }
+    if (node->horizontal != horizontal) {
+        return false;
+    }
+    bool const in_first { has_leaf(node->first.get(), pane) };
+    if (!in_first && !has_leaf(node->second.get(), pane)) {
+        return false;
+    }
+
+    uint32_t const total { horizontal ? rect.width : rect.height };
+    if (total < 2 * min_pane_cells) {
+        return false; // nothing to redistribute
+    }
+    int const current { static_cast<int>(horizontal ? first_rect.width : first_rect.height) };
+    int const wanted { current + (in_first ? delta : -delta) };
+    int const clamped { std::clamp(
+        wanted, static_cast<int>(min_pane_cells),
+        static_cast<int>(total - min_pane_cells)
+    ) };
+    node->ratio = static_cast<float>(clamped) / static_cast<float>(total);
+    return true;
 }
 
 //! The leaf node holding `pane`, or nullptr.
@@ -214,6 +270,36 @@ auto Layout::raise_float(uint32_t pane) -> bool {
     }
     std::rotate(found, found + 1, _floats.end()); // to the back: topmost
     return true;
+}
+
+auto Layout::resize_pane(
+    uint32_t pane, int width_delta, int height_delta, Rectangle screen
+) -> bool {
+    for (Float& f : _floats) { // floats resize their own rectangle
+        if (f.pane != pane) {
+            continue;
+        }
+        auto const grow = [](uint32_t size, int delta, uint32_t minimum) {
+            int const wanted { static_cast<int>(size) + delta };
+            return static_cast<uint32_t>(std::max(wanted, static_cast<int>(minimum)));
+        };
+        Rectangle resized { f.rect };
+        resized.width = grow(f.rect.width, width_delta, 2 * min_pane_cells);
+        resized.height = grow(f.rect.height, height_delta, min_pane_cells);
+        bool const changed { resized != f.rect };
+        f.rect = resized;
+        return changed;
+    }
+
+    // tiles move the divider of the nearest split on each axis
+    bool changed { false };
+    if (width_delta != 0) {
+        changed |= resize_in_tree(_root, screen, pane, true, width_delta);
+    }
+    if (height_delta != 0) {
+        changed |= resize_in_tree(_root, screen, pane, false, height_delta);
+    }
+    return changed;
 }
 
 auto Layout::swap(uint32_t a, uint32_t b) -> bool {

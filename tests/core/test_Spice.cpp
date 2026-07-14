@@ -154,6 +154,20 @@ TEST_CASE("core::Spice::swap_panes() exchanges places and keeps focus by id") {
     CHECK_FALSE(session.swap_panes(first, 9999));
 }
 
+TEST_CASE("core::Spice::resize_focused() reshapes the focused tile") {
+    auto session { make_session() }; // 80x24
+    uint32_t const first { session.open_welcome_pane() };
+    auto buffer { session.create_buffer("s", core::BufferCapability::editable) };
+    uint32_t const second { session.open_pane(core::PaneType::edit, buffer) };
+
+    CHECK(session.resize_focused(6, 0)); // grow the focused (right) pane
+    CHECK_EQ(session.pane_area(second)->width, 46u);
+    CHECK_EQ(session.pane_area(first)->width, 34u);
+
+    session.close_focused_pane();
+    CHECK_FALSE(session.resize_focused(6, 0)); // a lone tile has no divider
+}
+
 TEST_CASE("core::Spice::is_floating()") {
     auto session { make_session() };
     uint32_t const tiled { session.open_welcome_pane() };

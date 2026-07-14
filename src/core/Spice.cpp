@@ -249,6 +249,17 @@ auto Spice::is_floating(uint32_t id) const -> bool {
     return _layout.is_floating(id);
 }
 
+auto Spice::resize_focused(int width_delta, int height_delta) -> bool {
+    if (_focused == 0) {
+        return false;
+    }
+    bool const changed { _layout.resize_pane(_focused, width_delta, height_delta, _screen) };
+    if (changed) {
+        resize_ptys(); // pane content sizes moved with the dividers
+    }
+    return changed;
+}
+
 auto Spice::swap_panes(uint32_t a, uint32_t b) -> bool {
     if (!_panes.contains(a) || !_panes.contains(b)) {
         return false;

@@ -66,6 +66,10 @@ public:
     //! The title bar's close button (the x); zero-sized when too narrow.
     static auto close_button(Rectangle area) -> Rectangle;
 
+    //! The mouse-resize grab handle: the last two cells of the bottom
+    //! border (dragging it moves the pane's bottom-right corner).
+    static auto resize_corner(Rectangle area) -> Rectangle;
+
     //! Draws the pane chrome and content into `grid`: a title bar (the
     //! buffer's name plus the F / x buttons) across the top, side borders,
     //! a rounded bottom - scrolling first so the cursor stays visible.

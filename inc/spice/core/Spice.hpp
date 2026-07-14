@@ -41,7 +41,7 @@ public:
     //! filling the screen for the first pane). Focuses it; returns its id.
     //! This overload picks the orientation from the tile's shape.
     auto open_pane(PaneType type, std::shared_ptr<Buffer> buffer) -> uint32_t;
-
+// This ios a comment
     //! Same, with an explicit orientation: `horizontal` puts the new pane
     //! to the right of the split tile (vertical divider), otherwise below.
     auto open_pane(PaneType type, std::shared_ptr<Buffer> buffer, bool horizontal) -> uint32_t;
@@ -89,6 +89,10 @@ public:
     auto is_floating(uint32_t id) const -> bool;
     //! Exchanges the places of two panes (tile/tile, float/float or mixed).
     auto swap_panes(uint32_t a, uint32_t b) -> bool;
+
+    //! Resizes the focused pane by cell deltas (see Layout::resize_pane),
+    //! keeping any PTYs in step with their pane's new content size.
+    auto resize_focused(int width_delta, int height_delta) -> bool;
 
     auto pane_at(Position point) const -> std::optional<uint32_t>;
     //! The rectangle a pane currently occupies (tile or float).

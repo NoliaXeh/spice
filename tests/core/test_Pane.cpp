@@ -238,6 +238,12 @@ TEST_CASE("core::Pane highlights the cursor line when focused") {
     CHECK_EQ(grid.background_at({ 2, 5, 0 }), theme.color(Theme::Usage::background));
 }
 
+TEST_CASE("core::Pane::resize_corner() is the bottom-right of the border") {
+    Rectangle const area { { 2, 4, 0 }, 20, 6 };
+    CHECK_EQ(Pane::resize_corner(area), Rectangle { { 7, 22, 0 }, 2, 1 });
+    CHECK_EQ(Pane::resize_corner({ { 0, 0, 0 }, 1, 1 }).width, 0u); // too small
+}
+
 TEST_CASE("core::Pane tiny areas draw nothing and stay safe") {
     Grid grid { 4, 4 };
     Theme const theme;

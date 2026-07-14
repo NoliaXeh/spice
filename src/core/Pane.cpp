@@ -124,6 +124,17 @@ auto Pane::close_button(Rectangle area) -> Rectangle {
     return { { area.position.line, area.position.column + area.width - 4, 0 }, 3, 1 };
 }
 
+auto Pane::resize_corner(Rectangle area) -> Rectangle {
+    if (area.width < 2 || area.height < 2) {
+        return { area.position, 0, 0 };
+    }
+    return {
+        { area.position.line + area.height - 1, area.position.column + area.width - 2, 0 },
+        2,
+        1,
+    };
+}
+
 auto Pane::clamp(Position position) const -> Position {
     uint32_t const last_line { _buffer->line_count() - 1 };
     uint32_t const line { position.line < last_line ? position.line : last_line };

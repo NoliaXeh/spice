@@ -131,6 +131,44 @@ TEST_CASE("core::Layout::raise_float() puts a float on top") {
     CHECK_FALSE(layout.raise_float(9)); // unknown
 }
 
+TEST_CASE("core::Layout::resize_pane() moves the divider of a split") {
+    Layout layout;
+    layout.insert(1, 0, true);
+    layout.insert(2, 1, true); // side by side, 40/40 on the 80-wide screen
+
+    CHECK(layout.resize_pane(1, 10, 0, screen)); // grow the left pane
+    auto tiles { layout.tiles(screen) };
+    CHECK_EQ(tiles[0].second.width, 50u);
+    CHECK_EQ(tiles[1].second.width, 30u);
+    CHECK_EQ(tiles[1].second.position.column, 50u);
+
+    CHECK(layout.resize_pane(2, 6, 0, screen)); // growing the right one shrinks the left
+    tiles = layout.tiles(screen);
+    CHECK_EQ(tiles[0].second.width, 44u);
+
+    CHECK_FALSE(layout.resize_pane(1, 0, 5, screen)); // no vertical split to adjust
+}
+
+TEST_CASE("core::Layout::resize_pane() never squeezes a tile away") {
+    Layout layout;
+    layout.insert(1, 0, true);
+    layout.insert(2, 1, true);
+    CHECK(layout.resize_pane(1, 1000, 0, screen));
+    auto const tiles { layout.tiles(screen) };
+    CHECK_EQ(tiles[1].second.width, 3u); // the minimum survives
+}
+
+TEST_CASE("core::Layout::resize_pane() resizes floats directly") {
+    Layout layout;
+    layout.float_pane(7, { { 2, 2, 0 }, 10, 5 });
+    CHECK(layout.resize_pane(7, 4, 2, screen));
+    CHECK_EQ(layout.floats()[0].second, Rectangle { { 2, 2, 0 }, 14, 7 });
+
+    CHECK(layout.resize_pane(7, -100, -100, screen)); // clamped to a minimum
+    CHECK_EQ(layout.floats()[0].second.width, 6u);
+    CHECK_EQ(layout.floats()[0].second.height, 3u);
+}
+
 TEST_CASE("core::Layout::swap() exchanges two tiles") {
     Layout layout;
     layout.insert(1, 0, true);

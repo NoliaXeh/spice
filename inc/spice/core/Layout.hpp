@@ -54,6 +54,13 @@ public:
     //! Puts a floating pane above all other floats; false if not floating.
     auto raise_float(uint32_t pane) -> bool;
 
+    //! Resizes a pane by cell deltas. A float grows/shrinks its own
+    //! rectangle; a tile moves the divider of the nearest split on each
+    //! axis (sizes are clamped so no pane vanishes). False when nothing
+    //! could change - e.g. a tile with no split along that axis.
+    auto resize_pane(uint32_t pane, int width_delta, int height_delta, Rectangle screen)
+        -> bool;
+
     //! Exchanges the places of two panes - tile with tile, float with
     //! float, or tile with float (which trades tiled for floating).
     auto swap(uint32_t a, uint32_t b) -> bool;
