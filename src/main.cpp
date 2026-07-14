@@ -26,6 +26,7 @@
 #include "spice/core/Grid.hpp"
 #include "spice/core/KeyBytes.hpp"
 #include "spice/core/Palette.hpp"
+#include "spice/core/PathCompletion.hpp"
 #include "spice/core/Position.hpp"
 #include "spice/core/Rectangle.hpp"
 #include "spice/core/Spice.hpp"
@@ -89,10 +90,17 @@ private:
     //! Runs a command by name and requests a full frame.
     auto run_command(std::string_view name) -> void;
 
-    // -- prompts and clipboard --------------------------------------
+    // -- prompts, the file picker and the clipboard -------------------
     //! Opens the palette as a free-text prompt; `action` gets the answer.
     auto open_prompt(std::string title, std::function<void(std::string const&)> action)
         -> void;
+    //! Opens the "Open file" picker: path completion by default, fuzzy
+    //! finding when the query starts with a space.
+    auto open_file_picker() -> void;
+    //! The picker's item source for one query.
+    auto file_picker_items(std::string const& query) -> std::vector<core::Palette::Item>;
+    //! Loads (or starts) `path` in a new edit pane.
+    auto open_file(std::string const& path) -> void;
     //! Writes the focused buffer to `path` and marks it saved.
     auto save_focused_to(std::string const& path) -> void;
     //! OSC 52: hands the copied text to the terminal's clipboard.
@@ -140,6 +148,7 @@ private:
     uint32_t _scratch_count { 0 };
     std::string _clipboard;
     std::function<void(std::string const&)> _prompt_action;
+    std::function<void(std::string const&)> _picker_action; //!< gets the picked path
     Drag _drag;
 
     std::vector<Rectangle> _damage; //!< rectangles to render this iteration
@@ -245,20 +254,8 @@ auto App::register_commands() -> void {
         _session.open_pty_pane({ shell != nullptr ? shell : "/bin/sh" });
     } });
 
-    // files (Open/Save-as prompt for their path through the palette)
-    _registry.add({ "file.open", "Open file", [this] {
-        open_prompt("Open file", [this](std::string const& path) {
-            if (path.empty()) {
-                return;
-            }
-            auto const content { core::read_file(path) };
-            auto buffer { _session.create_buffer(
-                std::string(path), core::BufferCapability::editable, content.value_or("")
-            ) };
-            buffer->set_path(path);
-            _session.open_pane(core::PaneType::edit, std::move(buffer));
-        });
-    } });
+    // files (Open picks its path through the picker, Save-as via a prompt)
+    _registry.add({ "file.open", "Open file", [this] { open_file_picker(); } });
     _registry.add({ "file.save", "Save", [this] {
         auto* pane { _session.focused_pane() };
         if (pane == nullptr
@@ -447,6 +444,38 @@ auto App::open_prompt(std::string title, std::function<void(std::string const&)>
     _damage.push_back(core::Palette::area(_screen));
 }
 
+auto App::open_file_picker() -> void {
+    _picker_action = [this](std::string const& path) { open_file(path); };
+    _palette.open_picker("Open file", [this](std::string const& query) {
+        return file_picker_items(query);
+    });
+    _damage.push_back(core::Palette::area(_screen));
+}
+
+auto App::file_picker_items(std::string const& query) -> std::vector<core::Palette::Item> {
+    std::vector<core::Palette::Item> items;
+    if (!query.empty() && query.front() == ' ') { // leading space: fuzzy find
+        for (auto& path : core::fuzzy_find_files(query.substr(1), 50)) {
+            items.push_back({ path, path });
+        }
+        return items;
+    }
+    for (auto const& entry : core::complete_path(query)) {
+        std::string const path { entry.directory ? entry.path + "/" : entry.path };
+        items.push_back({ path, path });
+    }
+    return items;
+}
+
+auto App::open_file(std::string const& path) -> void {
+    auto const content { core::read_file(path) };
+    auto buffer { _session.create_buffer(
+        std::string(path), core::BufferCapability::editable, content.value_or("")
+    ) };
+    buffer->set_path(path);
+    _session.open_pane(core::PaneType::edit, std::move(buffer));
+}
+
 auto App::save_focused_to(std::string const& path) -> void {
     auto* pane { _session.focused_pane() };
     if (pane == nullptr || path.empty()) {
@@ -493,6 +522,7 @@ auto App::on_palette_key(core::Event const& event) -> void {
     if (core::event_id(event) == master_key) {
         _palette.close();
         _prompt_action = nullptr;
+        _picker_action = nullptr;
         _damage.push_back(core::Palette::area(_screen));
         return;
     }
@@ -505,17 +535,39 @@ auto App::on_palette_key(core::Event const& event) -> void {
         break;
     case core::Palette::Outcome::closed:
         _prompt_action = nullptr;
+        _picker_action = nullptr;
         _damage.push_back(core::Palette::area(_screen));
         break;
     case core::Palette::Outcome::picked:
-        if (_prompt_action) { // a prompt gets the typed text...
+        if (_picker_action) { // the file picker gets the picked path...
+            std::string value { _palette.selected_name() };
+            if (value.empty()) {
+                value = _palette.query(); // nothing listed: the text stands
+            }
+            if (!value.empty() && value.back() == '/') {
+                // a directory: descend, keeping the picker open inside it
+                _palette.open_picker("Open file", [this](std::string const& query) {
+                    return file_picker_items(query);
+                });
+                _palette.set_query(value);
+                _damage.push_back(core::Palette::area(_screen));
+                break;
+            }
+            auto const action { std::move(_picker_action) };
+            _picker_action = nullptr;
+            if (!value.empty()) {
+                action(value);
+            }
+            _full_repaint = true;
+        } else if (_prompt_action) { // ...a prompt gets the typed text...
             auto const action { std::move(_prompt_action) };
             _prompt_action = nullptr;
             action(_palette.query());
-        } else { // ...the command palette runs the pick
+            _full_repaint = true;
+        } else { // ...and the command palette runs the pick
             _registry.run(_palette.selected_name());
+            _full_repaint = true;
         }
-        _full_repaint = true;
         break;
     case core::Palette::Outcome::ignored:
         break;

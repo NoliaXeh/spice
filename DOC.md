@@ -256,7 +256,18 @@ will register theirs over the wire protocol, name-spaced by plugin name.
 takes a snapshot of `(name, title)` items and sorts by title; typing filters
 (case-insensitive substring), up/down move the selection, RETURN picks, ESCAPE closes.
 `open_input(title)` reuses the same overlay as a free-text prompt (no items; RETURN picks the
-typed text, read back via `query()`) - that is how Open file / Save as ask for a path.
+typed text, read back via `query()`) - that is how Save as asks for a path. `open_picker(title,
+source)` is the third mode: the query is fed to a `source` callback that computes the items
+(it is the source's input, not a filter), re-run on every edit; RETURN picks the selection, or
+the typed text itself when nothing is listed.
+
+Open file is built on the picker plus `PathCompletion.hpp`: by default `complete_path()`
+completes the typed path VSCode-Remote-style - the query's directory part is listed, the rest
+prefix-filters it case-insensitively, so `..`, nested paths and absolute `/` all just work;
+picking a directory descends (the picker reopens with the query set inside it), picking a file
+opens it, and RETURN with no completion takes the typed path as a new file. A query starting
+with a **space** switches to `fuzzy_find_files()`: a recursive, case-insensitive subsequence
+match over the tree (hidden directories skipped, scanning capped), shortest paths first.
 `handle(KeyEvent)` returns an `Outcome` (`ignored / updated / closed / picked`) so the caller
 knows what to repaint and whether to run `selected_name()` - the palette itself never runs
 anything. `draw()` paints a centered, capped-size box (focused-border color, `Commands`
