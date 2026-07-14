@@ -203,4 +203,31 @@ auto Grid::render_rect(TermInfo& terminfo, Position position, Rectangle rect) co
     fwrite(frame.data(), 1, frame.size(), stdout);
 }
 
+namespace {
+
+auto darken(Color color) -> Color {
+    color.r = static_cast<uint8_t>(color.r / 2);
+    color.g = static_cast<uint8_t>(color.g / 2);
+    color.b = static_cast<uint8_t>(color.b / 2);
+    return color;
+}
+
+auto darken_cell(Grid& grid, Position cell) -> void {
+    grid.set_style(cell, darken(grid.style_at(cell)));
+    grid.set_background(cell, darken(grid.background_at(cell)));
+}
+
+}
+
+auto drop_shadow(Grid& grid, Rectangle rect) -> void {
+    uint32_t const below { rect.position.line + rect.height };
+    uint32_t const beside { rect.position.column + rect.width };
+    for (uint32_t column { rect.position.column + 1 }; column <= beside; ++column) {
+        darken_cell(grid, { below, column, 0 });
+    }
+    for (uint32_t line { rect.position.line + 1 }; line < below; ++line) {
+        darken_cell(grid, { line, beside, 0 });
+    }
+}
+
 }

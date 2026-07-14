@@ -19,6 +19,7 @@ public:
         selection_text,     //!< selected text
         selection_background,
         cursor,
+        cursor_line,        //!< background of the cursor's line, focused edit panes
         border,             //!< pane border, unfocused
         border_focused,     //!< pane border, focused
         titlebar_text,      //!< pane title bar: dark text...

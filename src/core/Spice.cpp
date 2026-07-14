@@ -283,6 +283,7 @@ auto Spice::draw(Grid& grid, Theme const& theme) -> void {
     for (auto const& [id, rect] : _layout.floats()) { // bottom to top
         if (auto* p { pane(id) }) {
             p->draw(grid, rect, id == _focused, theme);
+            drop_shadow(grid, rect); // lift the float off what is beneath
         }
     }
 }

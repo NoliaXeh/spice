@@ -1,6 +1,7 @@
 #include "spice/core/Pane.hpp"
 #include "spice/core/Utf8.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string_view>
 #include <utility>
@@ -172,18 +173,27 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     uint32_t const left { area.position.column };
     uint32_t const right { area.position.column + area.width - 1 };
 
-    // the title bar: dark on light across the whole top row, the buffer's
-    // name on the left (with * for unsaved edits, [ro] for read-only), and
-    // the " F " (float) and " x " (close) buttons on the right, in red
-    std::string title { " " + _buffer->name() };
+    // the title bar: dark on light across the whole top row - a pane-type
+    // dot, the buffer's name (bold when focused, with * for unsaved edits
+    // and [ro] for read-only), and the " F " (float) and " x " (close)
+    // buttons on the right, in red
+    std::string title { _buffer->name() };
     if (_buffer->capability() == BufferCapability::editable && _buffer->dirty()) {
         title += " *";
     }
     if (_read_only) {
         title += " [ro]";
     }
+    Color title_text { bar_text };
+    title_text.style.bold = focused;
+    Color const dot {
+        _type == PaneType::edit ? colors::soft_green
+        : _type == PaneType::pty ? colors::amber
+        : colors::steel_blue
+    };
     Rectangle const float_at { float_button(area) };
     Rectangle const close_at { close_button(area) };
+    uint32_t const title_start { left + 3 }; // after " • "
     uint32_t const title_end { // don't run into the buttons
         float_at.width > 0 ? float_at.position.column : right + 1
     };
@@ -195,10 +205,13 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
         } else if (close_at.contains(cell)) {
             uint32_t const index { column - close_at.position.column };
             paint_cell(grid, cell, index == 1 ? "x" : " ", button_text, button_background);
-        } else if (column - left < title.size() && column < title_end) {
+        } else if (column == left + 1) {
+            paint_cell(grid, cell, "•", dot, bar_background);
+        } else if (column >= title_start && column - title_start < title.size()
+                   && column < title_end) {
             paint_cell(
-                grid, cell, std::string_view(title).substr(column - left, 1),
-                bar_text, bar_background
+                grid, cell, std::string_view(title).substr(column - title_start, 1),
+                title_text, bar_background
             );
         } else {
             paint_cell(grid, cell, " ", bar_text, bar_background);
@@ -226,6 +239,7 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     auto const selected_range { selection() };
     Color const selection_text { theme.color(Theme::Usage::selection_text) };
     Color const selection_background { theme.color(Theme::Usage::selection_background) };
+    Color const cursor_line { theme.color(Theme::Usage::cursor_line) };
     auto const is_selected = [&](Position in_buffer) -> bool {
         return selected_range
             && !document_order(in_buffer, selected_range->first)
@@ -235,6 +249,12 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     for (uint32_t row { 0 }; row < content.height; ++row) {
         std::string_view const line { _buffer->line(_scroll.line + row) };
         size_t offset { utf8_offset(line, _scroll.column) };
+
+        // the cursor's line gets a subtly lifted background when focused
+        bool const at_cursor {
+            focused && _type == PaneType::edit && _scroll.line + row == _cursor.line
+        };
+        Color const row_background { at_cursor ? cursor_line : background };
 
         for (uint32_t column { 0 }; column < content.width; ++column) {
             Position const cell {
@@ -253,8 +273,22 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
             if (is_selected(in_buffer)) {
                 paint_cell(grid, cell, glyph, selection_text, selection_background);
             } else {
-                paint_cell(grid, cell, glyph, text, background);
+                paint_cell(grid, cell, glyph, text, row_background);
             }
+        }
+    }
+
+    // a scrollbar thumb on the right border once content overflows the view
+    uint32_t const lines { _buffer->line_count() };
+    if (content.height > 0 && lines > content.height) {
+        uint32_t const track { content.height };
+        uint32_t const thumb { std::max(1u, track * content.height / lines) };
+        uint32_t const max_scroll { lines - content.height };
+        uint32_t const offset {
+            max_scroll > 0 ? _scroll.line * (track - thumb) / max_scroll : 0
+        };
+        for (uint32_t i { 0 }; i < thumb; ++i) {
+            paint_cell(grid, { top + 1 + offset + i, right, 0 }, "█", border, background);
         }
     }
 }

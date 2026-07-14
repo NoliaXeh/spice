@@ -293,6 +293,8 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
             paint_row(grid, origin, content_width, "", text, background);
         }
     }
+
+    drop_shadow(grid, rect); // lift the palette off the panes beneath
 }
 
 auto Palette::cursor_screen_position(Rectangle screen) const -> Position {

@@ -199,11 +199,14 @@ nothing (arriving content is not an edit); history is capped at 1000 edits.
 **`Pane`** (Pane.cpp) - a view: `PaneType` (edit / grid / pty), a `shared_ptr<Buffer>` (shared: two panes can view one buffer; a
 buffer with no pane just lives on), a cursor and a scroll offset - the only view-specific
 state. `draw(grid, area, focused, theme)` paints the pane chrome: a **title bar** across the
-top (dark text on a light background, brighter when focused) carrying the buffer's name and
-two red buttons - `F` floats/docks the pane, `x` closes it (`float_button`/`close_button`
-expose their cells for hit-testing; panes narrower than 12 cells show a bare bar) - then side
-borders and a rounded `╰─╯` bottom, then the visible slice of the buffer. Edit panes
-auto-scroll to keep
+top (dark text on a light background, brighter and bold when focused) carrying a pane-type
+dot (green edit, amber pty, blue grid), the buffer's name and two red buttons - `F`
+floats/docks the pane, `x` closes it (`float_button`/`close_button` expose their cells for
+hit-testing; panes narrower than 12 cells show a bare bar) - then side borders with a
+**scrollbar thumb** once content overflows the view, a rounded `╰─╯` bottom, and the visible
+slice of the buffer, the (focused) cursor's line on a subtly lifted background. Floating
+panes and the palette cast a **drop shadow** (`drop_shadow` in Grid.hpp darkens the cells one
+row below / one column right, in place). Edit panes auto-scroll to keep
 the cursor visible; grid/pty panes keep whatever scroll they were given (`scroll_to_bottom`
 for scrollback-style following). `position_from_screen` maps a click to a buffer position;
 `cursor_screen_position` maps the cursor back to a screen cell. A pane can be **read-only**

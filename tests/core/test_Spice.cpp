@@ -244,7 +244,7 @@ TEST_CASE("core::Spice::draw() renders every pane into the grid") {
     core::Theme const theme;
     session.draw(grid, theme);
 
-    CHECK_EQ(grid.char_at({ 0, 1, 0 }), "W"); // title bar " Welcome"
+    CHECK_EQ(grid.char_at({ 0, 3, 0 }), "W"); // title bar " • Welcome"
     CHECK_EQ(grid.char_at({ 9, 0, 0 }), "╰"); // rounded bottom
     CHECK_EQ(grid.char_at({ 9, 19, 0 }), "╯");
 }

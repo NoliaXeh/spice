@@ -76,6 +76,12 @@ private:
     std::vector<Color> _background_color; //!< flat, row-major, one per cell
 };
 
+//! Casts a drop shadow for something drawn at `rect`: the cells one row
+//! below and one column right of it are darkened in place (halved RGB),
+//! preserving their text - floating panes and the palette use it to lift
+//! off the panes beneath. Off-grid cells are ignored.
+auto drop_shadow(Grid& grid, Rectangle rect) -> void;
+
 }
 
 #endif // SPICE_CORE_GRID_H

@@ -42,6 +42,13 @@ inline constexpr Color cyan          { .r = 0x00, .g = 0xFF, .b = 0xFF, .style =
 inline constexpr Color magenta       { .r = 0xFF, .g = 0x00, .b = 0xFF, .style = {} };
 inline constexpr Color orange        { .r = 0xFF, .g = 0xA5, .b = 0x00, .style = {} };
 
+// softer accents, for chrome rather than content
+inline constexpr Color crimson       { .r = 0xD6, .g = 0x45, .b = 0x45, .style = {} };
+inline constexpr Color soft_green    { .r = 0x63, .g = 0xB4, .b = 0x63, .style = {} };
+inline constexpr Color amber         { .r = 0xD9, .g = 0xA8, .b = 0x5C, .style = {} };
+inline constexpr Color steel_blue    { .r = 0x6C, .g = 0x9C, .b = 0xD1, .style = {} };
+inline constexpr Color charcoal      { .r = 0x3E, .g = 0x3E, .b = 0x52, .style = {} };
+
 }
 
 }

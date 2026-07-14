@@ -23,13 +23,15 @@ TEST_CASE("core::Pane draws title bar, borders and content into a grid") {
 
     pane.draw(grid, { { 0, 0, 0 }, 20, 5 }, false, theme);
 
-    // the title bar: " buf" on a light background, dark text
+    // the title bar: " • buf" on a light background, dark text
     CHECK_EQ(grid.char_at({ 0, 0, 0 }), " ");
-    CHECK_EQ(grid.char_at({ 0, 1, 0 }), "b");
-    CHECK_EQ(grid.char_at({ 0, 2, 0 }), "u");
-    CHECK_EQ(grid.char_at({ 0, 3, 0 }), "f");
-    CHECK_EQ(grid.background_at({ 0, 4, 0 }), theme.color(Theme::Usage::titlebar_background));
-    CHECK_EQ(grid.style_at({ 0, 1, 0 }), theme.color(Theme::Usage::titlebar_text));
+    CHECK_EQ(grid.char_at({ 0, 1, 0 }), "•"); // pane-type dot
+    CHECK_EQ(grid.char_at({ 0, 3, 0 }), "b");
+    CHECK_EQ(grid.char_at({ 0, 4, 0 }), "u");
+    CHECK_EQ(grid.char_at({ 0, 5, 0 }), "f");
+    CHECK_EQ(grid.background_at({ 0, 6, 0 }), theme.color(Theme::Usage::titlebar_background));
+    CHECK_EQ(grid.style_at({ 0, 3, 0 }), theme.color(Theme::Usage::titlebar_text));
+    CHECK_EQ(grid.style_at({ 0, 1, 0 }).g, colors::soft_green.g); // edit dot
 
     // side borders and the rounded bottom
     CHECK_EQ(grid.char_at({ 1, 0, 0 }), "│");
@@ -78,6 +80,8 @@ TEST_CASE("core::Pane focus brightens the bar and colors the border") {
         grid.background_at({ 0, 5, 0 }),
         theme.color(Theme::Usage::titlebar_background_focused)
     );
+    bool const bold_title { grid.style_at({ 0, 3, 0 }).style.bold };
+    CHECK(bold_title); // the focused title is bold
     CHECK_EQ(grid.style_at({ 1, 0, 0 }), theme.color(Theme::Usage::border_focused));
 
     pane.draw(grid, { { 0, 0, 0 }, 20, 4 }, false, theme);
@@ -180,8 +184,9 @@ TEST_CASE("core::Pane draws the selection with the selection colors") {
         grid.background_at({ 1, 3, 0 }), // 'l'
         theme.color(Theme::Usage::selection_background)
     );
-    CHECK_EQ(grid.background_at({ 1, 1, 0 }), theme.color(Theme::Usage::background)); // 'h'
-    CHECK_EQ(grid.background_at({ 1, 4, 0 }), theme.color(Theme::Usage::background)); // second 'l'
+    // unselected neighbours sit on the (focused) cursor's line highlight
+    CHECK_EQ(grid.background_at({ 1, 1, 0 }), theme.color(Theme::Usage::cursor_line)); // 'h'
+    CHECK_EQ(grid.background_at({ 1, 4, 0 }), theme.color(Theme::Usage::cursor_line)); // second 'l'
 }
 
 TEST_CASE("core::Pane read-only flag shows [ro] in the title") {
@@ -192,11 +197,45 @@ TEST_CASE("core::Pane read-only flag shows [ro] in the title") {
 
     pane.set_read_only(true);
     pane.draw(grid, { { 0, 0, 0 }, 20, 4 }, false, theme);
-    // bar: " buf [ro]" - the marker starts at column 5
-    CHECK_EQ(grid.char_at({ 0, 5, 0 }), "[");
-    CHECK_EQ(grid.char_at({ 0, 6, 0 }), "r");
-    CHECK_EQ(grid.char_at({ 0, 7, 0 }), "o");
-    CHECK_EQ(grid.char_at({ 0, 8, 0 }), "]");
+    // bar: " • buf [ro]" - the marker starts at column 7
+    CHECK_EQ(grid.char_at({ 0, 7, 0 }), "[");
+    CHECK_EQ(grid.char_at({ 0, 8, 0 }), "r");
+    CHECK_EQ(grid.char_at({ 0, 9, 0 }), "o");
+    CHECK_EQ(grid.char_at({ 0, 10, 0 }), "]");
+}
+
+TEST_CASE("core::Pane shows a scrollbar thumb once content overflows") {
+    Grid grid { 20, 6 }; // content height 4
+    Theme const theme;
+    Pane pane { PaneType::edit, make_buffer("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11") };
+    Rectangle const area { { 0, 0, 0 }, 20, 6 };
+
+    pane.draw(grid, area, false, theme);
+    CHECK_EQ(grid.char_at({ 1, 19, 0 }), "█"); // thumb at the top
+
+    pane.set_cursor({ 11, 0, 0 }); // jump to the end: thumb at the bottom
+    pane.draw(grid, area, true, theme);
+    CHECK_EQ(grid.char_at({ 4, 19, 0 }), "█");
+    CHECK_EQ(grid.char_at({ 1, 19, 0 }), "│"); // track above it
+
+    Pane fits { PaneType::edit, make_buffer("a\nb") };
+    fits.draw(grid, area, false, theme);
+    CHECK_EQ(grid.char_at({ 1, 19, 0 }), "│"); // no overflow: no thumb
+}
+
+TEST_CASE("core::Pane highlights the cursor line when focused") {
+    Grid grid { 20, 5 };
+    Theme const theme;
+    Pane pane { PaneType::edit, make_buffer("one\ntwo") };
+    Rectangle const area { { 0, 0, 0 }, 20, 5 };
+    pane.set_cursor({ 1, 0, 0 });
+
+    pane.draw(grid, area, true, theme);
+    CHECK_EQ(grid.background_at({ 2, 5, 0 }), theme.color(Theme::Usage::cursor_line));
+    CHECK_EQ(grid.background_at({ 1, 5, 0 }), theme.color(Theme::Usage::background));
+
+    pane.draw(grid, area, false, theme); // unfocused: no highlight
+    CHECK_EQ(grid.background_at({ 2, 5, 0 }), theme.color(Theme::Usage::background));
 }
 
 TEST_CASE("core::Pane tiny areas draw nothing and stay safe") {
