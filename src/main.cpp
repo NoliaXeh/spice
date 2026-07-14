@@ -253,6 +253,7 @@ private:
     core::CommandRegistry _registry;
     core::Palette _palette;
     std::unordered_map<std::string, std::function<void(core::Event const&)>> _bindings;
+    std::unordered_map<std::string, std::string> _command_keys; //!< command -> its key name
 
     bool _running { true };
     uint32_t _scratch_count { 0 };
@@ -492,6 +493,7 @@ auto App::make_bindings() -> void {
             _bindings[*id] = [this, cmd = std::string(command)](core::Event const&) {
                 run_bound_command(cmd);
             };
+            _command_keys[std::string(command)] = std::string(name); // palette hint
         }
     };
 
@@ -509,6 +511,7 @@ auto App::make_bindings() -> void {
 
     // the Master key always reaches Spice
     _bindings[_master_id] = [this](core::Event const&) { open_palette(); };
+    _command_keys["palette.open"] = _config.master;
 
     auto const click = [this](core::Event const& event) { on_click(event); };
     _bindings["press left"] = click;
@@ -643,13 +646,13 @@ auto App::file_picker_items(std::string const& query) -> std::vector<core::Palet
     std::vector<core::Palette::Item> items;
     if (!query.empty() && query.front() == ' ') { // leading space: fuzzy find
         for (auto& path : core::fuzzy_find_files(query.substr(1), 50)) {
-            items.push_back({ path, path });
+            items.push_back({ path, path, {} });
         }
         return items;
     }
     for (auto const& entry : core::complete_path(query)) {
         std::string const path { entry.directory ? entry.path + "/" : entry.path };
-        items.push_back({ path, path });
+        items.push_back({ path, path, {} });
     }
     return items;
 }
@@ -893,7 +896,12 @@ auto App::open_palette() -> void {
     std::vector<core::Palette::Item> items;
     items.reserve(_registry.commands().size());
     for (auto const& command : _registry.commands()) {
-        items.push_back({ command.name, command.title });
+        auto const key { _command_keys.find(command.name) };
+        items.push_back({
+            command.name,
+            command.title,
+            key != _command_keys.end() ? key->second : std::string(),
+        });
     }
     _palette.open(std::move(items));
     _damage.push_back(core::Palette::area(_screen));

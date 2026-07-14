@@ -265,9 +265,12 @@ plugins address commands by it), supports `remove` (a restarting plugin re-regis
 `run(name)`. The built-ins are registered by main.cpp with lambdas over the session; plugins
 will register theirs over the wire protocol, name-spaced by plugin name.
 
-**`Palette`** (Palette.cpp) - the command palette UI, a modal overlay (not a pane). `open()`
-takes a snapshot of `(name, title)` items and sorts by title; typing filters
-(case-insensitive substring), up/down move the selection, RETURN picks, ESCAPE closes.
+**`Palette`** (Palette.cpp) - the command palette UI, a modal overlay (not a pane), centered
+and scaling with the terminal (about 3/5 of each axis within bounds). `open()` takes a
+snapshot of `(name, title, hint)` items and sorts by title; the hint - the command's key
+shortcut, fed from the binding map - is drawn right-aligned in the discreet info color.
+Typing filters (case-insensitive substring), up/down move the selection, RETURN picks,
+ESCAPE closes.
 `open_input(title)` reuses the same overlay as a free-text prompt (no items; RETURN picks the
 typed text, read back via `query()`) - that is how Save as asks for a path. `open_picker(title,
 source)` is the third mode: the query is fed to a `source` callback that computes the items
