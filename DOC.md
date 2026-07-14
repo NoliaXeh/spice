@@ -221,10 +221,13 @@ over an editable buffer, and the event log and the list floats are flagged too.
 **`Layout`** (Layout.cpp) - where panes are, knowing only pane ids. Two structures, exactly as
 the README prescribes:
 
-- the **split tree**: nodes are either a leaf (pane id) or a split (orientation + two
-  children). `tiles(screen)` partitions the screen recursively, each split halving its
-  rectangle exactly - tiles always cover the screen with no gaps. `insert` splits a leaf in
-  two; `remove` grafts the sibling into the parent's place.
+- the **split tree**: nodes are either a leaf (pane id) or a split (orientation, two
+  children, and a resizable **ratio** of the space the first child takes, 0.5 at birth).
+  `tiles(screen)` partitions the screen recursively and exactly - tiles always cover the
+  screen with no gaps. `insert` splits a leaf in two; `remove` grafts the sibling into the
+  parent's place; `resize_pane` moves the divider of the deepest split of the right
+  orientation above a pane (the divider adjacent to it), clamped so no tile drops below 3
+  cells - floats simply resize their own rectangle.
 - the **float list**: `(pane, Rectangle)` pairs; z-order is list rank, last on top.
 
 On top of those: `pane_at` (hit test, topmost float first, then tiles), `neighbor`
@@ -354,6 +357,11 @@ When the focused pane is a PTY pane, unbound keys - modifiers included, so ctrl-
 child - are translated back into terminal bytes (`key_to_bytes`, KeyBytes.hpp) and written to its pty; the
 output comes back through `pump_ptys()`, which runs every loop turn (event or 100 ms timeout)
 so shell output appears without user input.
+
+Panes are resizable by command (`pane.grow/shrink_horizontal/vertical`, alt-arrows by
+default) and by mouse: the last two cells of the bottom border are a grab handle
+(`Pane::resize_corner`) whose drag moves the pane's bottom-right corner - dividers for
+tiles, the rectangle itself for floats, PTY children resized in step.
 
 Panes are mouse-movable by their border: a press on a border cell (inside the pane's area but
 outside its content area) starts a drag. While dragging, a floating pane follows the pointer

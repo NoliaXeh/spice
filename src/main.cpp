@@ -134,13 +134,18 @@ constexpr std::pair<std::string_view, std::string_view> default_bindings[] {
     { "ctrl-down", "pane.focus_down" },
     { "ctrl-left", "pane.focus_left" },
     { "ctrl-right", "pane.focus_right" },
+    { "alt-right", "pane.grow_horizontal" },
+    { "alt-left", "pane.shrink_horizontal" },
+    { "alt-down", "pane.grow_vertical" },
+    { "alt-up", "pane.shrink_vertical" },
 };
 
 //! An in-progress mouse drag. Grabbed by the border, a pane moves: floats
 //! follow the pointer, docked panes swap with the drop target. Grabbed by
-//! the content, the drag selects text under the cursor.
+//! the content, the drag selects text under the cursor. Grabbed by the
+//! bottom-right corner, the drag resizes the pane.
 struct Drag {
-    enum class Kind : uint8_t { pane, text };
+    enum class Kind : uint8_t { pane, text, resize };
 
     bool active { false };
     Kind kind { Kind::pane };
@@ -387,6 +392,18 @@ auto App::register_commands() -> void {
     } });
     _registry.add({ "pane.float", "Float pane", [this] { _session.float_focused(); } });
     _registry.add({ "pane.dock", "Dock pane", [this] { _session.dock_focused(); } });
+    _registry.add({ "pane.grow_horizontal", "Grow pane horizontally", [this] {
+        _session.resize_focused(2, 0);
+    } });
+    _registry.add({ "pane.shrink_horizontal", "Shrink pane horizontally", [this] {
+        _session.resize_focused(-2, 0);
+    } });
+    _registry.add({ "pane.grow_vertical", "Grow pane vertically", [this] {
+        _session.resize_focused(0, 1);
+    } });
+    _registry.add({ "pane.shrink_vertical", "Shrink pane vertically", [this] {
+        _session.resize_focused(0, -1);
+    } });
 
     // pty
     _registry.add({ "pty.shell", "Run a shell in a new PTY", [this] {
@@ -786,6 +803,9 @@ auto App::on_click(core::Event const& event) -> void {
                     _session.float_focused();
                 }
                 _full_repaint = true;
+            } else if (core::Pane::resize_corner(*area).contains(point)) {
+                // the bottom-right corner: drag to resize
+                _drag = Drag { true, Drag::Kind::resize, *id, 0, 0 };
             } else if (!core::Pane::content_area(*area).contains(point)) {
                 // grabbed by the bar or a border: start moving the pane
                 _drag = Drag {
@@ -808,7 +828,23 @@ auto App::on_click(core::Event const& event) -> void {
 
 auto App::on_drag(core::MouseEvent const& mouse) -> void {
     if (mouse.action == core::MouseAction::move) {
-        if (_drag.kind == Drag::Kind::text) {
+        if (_drag.kind == Drag::Kind::resize) {
+            // the pane's bottom-right corner follows the pointer
+            if (auto const area { _session.pane_area(_drag.pane) }) {
+                int const width_delta {
+                    static_cast<int>(mouse.position.column)
+                    - static_cast<int>(area->position.column + area->width - 1)
+                };
+                int const height_delta {
+                    static_cast<int>(mouse.position.line)
+                    - static_cast<int>(area->position.line + area->height - 1)
+                };
+                if ((width_delta != 0 || height_delta != 0)
+                    && _session.resize_focused(width_delta, height_delta)) {
+                    _full_repaint = true; // dividers move the neighbours too
+                }
+            }
+        } else if (_drag.kind == Drag::Kind::text) {
             // extend the selection to the cell under the pointer
             if (auto* pane { _session.pane(_drag.pane) }) {
                 if (auto const area { _session.pane_area(_drag.pane) }) {
