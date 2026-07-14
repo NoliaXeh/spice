@@ -206,6 +206,67 @@ TEST_CASE("core::Buffer appends are not undoable") {
     CHECK_FALSE(buffer.undo().has_value());
 }
 
+TEST_CASE("core::Buffer::text_between() extracts ranges") {
+    Buffer buffer { "b", BufferCapability::editable, "hello\nworld\nlast" };
+    CHECK_EQ(buffer.text_between({ 0, 1, 0 }, { 0, 4, 0 }), "ell");
+    CHECK_EQ(buffer.text_between({ 0, 3, 0 }, { 2, 2, 0 }), "lo\nworld\nla");
+    CHECK_EQ(buffer.text_between({ 2, 2, 0 }, { 0, 3, 0 }), "lo\nworld\nla"); // normalized
+    CHECK_EQ(buffer.text_between({ 0, 2, 0 }, { 0, 2, 0 }), ""); // empty range
+}
+
+TEST_CASE("core::Buffer::erase_range() removes a multi-line range as one undo") {
+    Buffer buffer { "b", BufferCapability::editable, "hello\nworld\nlast" };
+    CHECK(buffer.erase_range({ 0, 3, 0 }, { 2, 2, 0 }));
+    CHECK_EQ(buffer.line_count(), 1u);
+    CHECK_EQ(buffer.line(0), "helst");
+
+    buffer.undo(); // one step restores everything
+    CHECK_EQ(buffer.line_count(), 3u);
+    CHECK_EQ(buffer.line(0), "hello");
+    CHECK_EQ(buffer.line(1), "world");
+    CHECK_EQ(buffer.line(2), "last");
+    CHECK_FALSE(buffer.undo().has_value());
+
+    buffer.redo();
+    CHECK_EQ(buffer.line(0), "helst");
+}
+
+TEST_CASE("core::Buffer::erase_range() rejects bad input") {
+    Buffer buffer { "b", BufferCapability::editable, "ab" };
+    CHECK_FALSE(buffer.erase_range({ 0, 1, 0 }, { 0, 1, 0 })); // empty
+    CHECK_FALSE(buffer.erase_range({ 0, 0, 0 }, { 5, 0, 0 })); // out of bounds
+
+    Buffer log { "l", BufferCapability::append_only, "ab" };
+    CHECK_FALSE(log.erase_range({ 0, 0, 0 }, { 0, 1, 0 }));
+}
+
+TEST_CASE("core::Buffer::insert_block() pastes multi-line text as one undo") {
+    Buffer buffer { "b", BufferCapability::editable, "AB" };
+    auto const end { buffer.insert_block({ 0, 1, 0 }, "x\ny\nz") };
+    REQUIRE(end.has_value());
+    CHECK_EQ(*end, Position { 2, 1, 0 });
+    CHECK_EQ(buffer.line(0), "Ax");
+    CHECK_EQ(buffer.line(1), "y");
+    CHECK_EQ(buffer.line(2), "zB");
+
+    buffer.undo();
+    CHECK_EQ(buffer.line_count(), 1u);
+    CHECK_EQ(buffer.line(0), "AB");
+
+    buffer.redo();
+    CHECK_EQ(buffer.line(2), "zB");
+}
+
+TEST_CASE("core::Buffer::insert_block() single line behaves like insert") {
+    Buffer buffer { "b", BufferCapability::editable, "AB" };
+    auto const end { buffer.insert_block({ 0, 1, 0 }, "xyz") };
+    REQUIRE(end.has_value());
+    CHECK_EQ(*end, Position { 0, 4, 0 });
+    CHECK_EQ(buffer.line(0), "AxyzB");
+    buffer.undo();
+    CHECK_EQ(buffer.line(0), "AB");
+}
+
 TEST_CASE("core::Buffer undo round-trips a mixed edit sequence") {
     Buffer buffer { "b", BufferCapability::editable, "hello world" };
     buffer.split_line({ 0, 5, 0 });   // "hello" / " world"

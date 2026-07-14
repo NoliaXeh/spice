@@ -9,6 +9,29 @@ namespace {
 //! Oldest edits are dropped past this, to bound memory.
 constexpr std::size_t history_limit { 1000 };
 
+//! Where a block of text ends when inserted at `begin`.
+auto block_end(spice::core::Position begin, std::string_view text) -> spice::core::Position {
+    size_t const last_newline { text.rfind('\n') };
+    if (last_newline == std::string_view::npos) {
+        return {
+            begin.line,
+            begin.column + static_cast<uint32_t>(spice::core::utf8_count(text)),
+            0,
+        };
+    }
+    uint32_t lines_added { 0 };
+    for (char const byte : text) {
+        if (byte == '\n') {
+            ++lines_added;
+        }
+    }
+    return {
+        begin.line + lines_added,
+        static_cast<uint32_t>(spice::core::utf8_count(text.substr(last_newline + 1))),
+        0,
+    };
+}
+
 }
 
 namespace spice::core {
@@ -91,6 +114,50 @@ auto Buffer::raw_join(uint32_t line) -> void {
     _lines.erase(_lines.begin() + line + 1);
 }
 
+auto Buffer::raw_insert_block(Position position, std::string_view text) -> Position {
+    size_t const newline { text.find('\n') };
+    if (newline == std::string_view::npos) {
+        raw_insert(position, text);
+        return {
+            position.line,
+            position.column + static_cast<uint32_t>(utf8_count(text)),
+            0,
+        };
+    }
+    // split the insertion point, put the first fragment on the first line,
+    // then stack the remaining fragments as their own lines before the tail
+    raw_split(position);
+    raw_insert(position, text.substr(0, newline));
+    uint32_t line { position.line + 1 };
+    std::string_view rest { text.substr(newline + 1) };
+    for (size_t cut { rest.find('\n') }; cut != std::string_view::npos;
+         cut = rest.find('\n')) {
+        _lines.insert(_lines.begin() + line, std::string(rest.substr(0, cut)));
+        rest = rest.substr(cut + 1);
+        ++line;
+    }
+    raw_insert({ line, 0, 0 }, rest);
+    return { line, static_cast<uint32_t>(utf8_count(rest)), 0 };
+}
+
+auto Buffer::raw_erase_block(Position begin, Position end) -> void {
+    if (begin.line == end.line) {
+        std::string& line { _lines[begin.line] };
+        size_t const from { utf8_offset(line, begin.column) };
+        line.erase(from, utf8_offset(line, end.column) - from);
+        return;
+    }
+    std::string& first { _lines[begin.line] };
+    std::string const& last { _lines[end.line] };
+    first.resize(utf8_offset(first, begin.column));
+    first += last.substr(utf8_offset(last, end.column));
+    _lines.erase(_lines.begin() + begin.line + 1, _lines.begin() + end.line + 1);
+}
+
+auto Buffer::valid(Position position) const -> bool {
+    return position.line < _lines.size() && position.column <= line_length(position.line);
+}
+
 // ---------------------------------------------------------------
 // Public operations: validate, mutate, record
 // ---------------------------------------------------------------
@@ -137,6 +204,53 @@ auto Buffer::split_line(Position position) -> bool {
     raw_split(position);
     record({ Edit::Kind::split, position, {} });
     return true;
+}
+
+auto Buffer::text_between(Position begin, Position end) const -> std::string {
+    if (document_order(end, begin)) {
+        std::swap(begin, end);
+    }
+    if (!valid(begin) || !valid(end) || begin == end) {
+        return {};
+    }
+    if (begin.line == end.line) {
+        std::string_view const line { _lines[begin.line] };
+        size_t const from { utf8_offset(line, begin.column) };
+        return std::string(line.substr(from, utf8_offset(line, end.column) - from));
+    }
+    std::string out { _lines[begin.line].substr(
+        utf8_offset(_lines[begin.line], begin.column)
+    ) };
+    for (uint32_t line { begin.line + 1 }; line < end.line; ++line) {
+        out += '\n';
+        out += _lines[line];
+    }
+    out += '\n';
+    out += _lines[end.line].substr(0, utf8_offset(_lines[end.line], end.column));
+    return out;
+}
+
+auto Buffer::erase_range(Position begin, Position end) -> bool {
+    if (document_order(end, begin)) {
+        std::swap(begin, end);
+    }
+    if (_capability != BufferCapability::editable
+        || !valid(begin) || !valid(end) || begin == end) {
+        return false;
+    }
+    std::string removed { text_between(begin, end) };
+    raw_erase_block(begin, end);
+    record({ Edit::Kind::erase_block, begin, std::move(removed) });
+    return true;
+}
+
+auto Buffer::insert_block(Position position, std::string_view text) -> std::optional<Position> {
+    if (_capability != BufferCapability::editable || !valid(position) || text.empty()) {
+        return std::nullopt;
+    }
+    Position const end { raw_insert_block(position, text) };
+    record({ Edit::Kind::insert_block, position, std::string(text) });
+    return end;
 }
 
 auto Buffer::append(std::string_view text) -> void {
@@ -206,6 +320,11 @@ auto Buffer::apply(Edit const& edit) -> Position {
     case Edit::Kind::join:
         raw_join(edit.position.line);
         return edit.position;
+    case Edit::Kind::insert_block:
+        return raw_insert_block(edit.position, edit.text);
+    case Edit::Kind::erase_block:
+        raw_erase_block(edit.position, block_end(edit.position, edit.text));
+        return edit.position;
     }
     return edit.position;
 }
@@ -228,6 +347,11 @@ auto Buffer::revert(Edit const& edit) -> Position {
     case Edit::Kind::join:
         raw_split(edit.position);
         return edit.position;
+    case Edit::Kind::insert_block:
+        raw_erase_block(edit.position, block_end(edit.position, edit.text));
+        return edit.position;
+    case Edit::Kind::erase_block:
+        return raw_insert_block(edit.position, edit.text);
     }
     return edit.position;
 }

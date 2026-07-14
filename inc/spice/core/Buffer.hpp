@@ -57,6 +57,19 @@ public:
     //! Editable buffers only.
     auto split_line(Position position) -> bool;
 
+    //! The text in [begin, end), lines joined with '\n' (empty if the
+    //! range is empty or out of bounds). Order of begin/end is normalized.
+    auto text_between(Position begin, Position end) const -> std::string;
+
+    //! Erases [begin, end) as a single undoable edit (multi-line ranges
+    //! included). Editable buffers only.
+    auto erase_range(Position begin, Position end) -> bool;
+
+    //! Inserts text that may contain newlines at `position`, as a single
+    //! undoable edit. Returns the position just past the inserted text
+    //! (for the caller's cursor). Editable buffers only.
+    auto insert_block(Position position, std::string_view text) -> std::optional<Position>;
+
     //! Appends text at the end of the buffer; '\n' starts a new line.
     //! Supported by every capability - append-only means *only* this grows.
     //! Appends are not undoable (they are content arriving, not edits).
@@ -72,7 +85,10 @@ public:
 private:
     //! One invertible edit: what happened, where, and the text involved.
     struct Edit {
-        enum class Kind : uint8_t { insert_text, erase_text, split, join };
+        enum class Kind : uint8_t {
+            insert_text, erase_text, split, join,
+            insert_block, erase_block, // multi-line text with '\n's
+        };
         Kind kind;
         Position position;
         std::string text;
@@ -82,6 +98,9 @@ private:
     auto raw_erase(Position position, std::size_t bytes) -> void;
     auto raw_split(Position position) -> void;
     auto raw_join(uint32_t line) -> void;
+    auto raw_insert_block(Position position, std::string_view text) -> Position;
+    auto raw_erase_block(Position begin, Position end) -> void;
+    auto valid(Position position) const -> bool;
     auto apply(Edit const& edit) -> Position;
     auto revert(Edit const& edit) -> Position;
     auto record(Edit&& edit) -> void;
