@@ -56,12 +56,19 @@ public:
     //! Scrolls so the buffer's last lines fill the view (scrollback style).
     auto scroll_to_bottom(Rectangle area) -> void;
 
-    //! The rectangle inside the border where content shows (empty when the
-    //! area is too small for a border).
+    //! The rectangle inside the chrome where content shows (empty when the
+    //! area is too small): below the title bar, inside the side borders.
     static auto content_area(Rectangle area) -> Rectangle;
 
-    //! Draws border, title (the buffer's name) and content into `grid`,
-    //! scrolling first so the cursor stays visible.
+    //! The title bar's float-toggle button (the F) for a pane drawn at
+    //! `area`; zero-sized when the pane is too narrow for buttons.
+    static auto float_button(Rectangle area) -> Rectangle;
+    //! The title bar's close button (the x); zero-sized when too narrow.
+    static auto close_button(Rectangle area) -> Rectangle;
+
+    //! Draws the pane chrome and content into `grid`: a title bar (the
+    //! buffer's name plus the F / x buttons) across the top, side borders,
+    //! a rounded bottom - scrolling first so the cursor stays visible.
     auto draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) -> void;
 
     //! The buffer position for a screen point, given the pane drawn at

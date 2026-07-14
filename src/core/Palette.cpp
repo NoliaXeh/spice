@@ -251,10 +251,10 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
         paint_cell(grid, { line, left, 0 }, "│", border, background);
         paint_cell(grid, { line, right, 0 }, "│", border, background);
     }
-    paint_cell(grid, { top, left, 0 }, "┌", border, background);
-    paint_cell(grid, { top, right, 0 }, "┐", border, background);
-    paint_cell(grid, { bottom, left, 0 }, "└", border, background);
-    paint_cell(grid, { bottom, right, 0 }, "┘", border, background);
+    paint_cell(grid, { top, left, 0 }, "╭", border, background);
+    paint_cell(grid, { top, right, 0 }, "╮", border, background);
+    paint_cell(grid, { bottom, left, 0 }, "╰", border, background);
+    paint_cell(grid, { bottom, right, 0 }, "╯", border, background);
 
     uint32_t const content_width { rect.width - 2 };
     uint32_t const list_rows { rect.height - 3 }; // minus border and query line

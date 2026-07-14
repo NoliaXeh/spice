@@ -16,42 +16,75 @@ auto make_buffer(std::string_view content) -> std::shared_ptr<Buffer> {
 
 }
 
-TEST_CASE("core::Pane draws border, title and content into a grid") {
-    Grid grid { 12, 5 };
+TEST_CASE("core::Pane draws title bar, borders and content into a grid") {
+    Grid grid { 20, 5 };
     Theme const theme;
     Pane pane { PaneType::edit, make_buffer("hello\nworld") };
 
-    pane.draw(grid, { { 0, 0, 0 }, 12, 5 }, false, theme);
+    pane.draw(grid, { { 0, 0, 0 }, 20, 5 }, false, theme);
 
-    CHECK_EQ(grid.char_at({ 0, 0, 0 }), "┌");
-    CHECK_EQ(grid.char_at({ 0, 11, 0 }), "┐");
-    CHECK_EQ(grid.char_at({ 4, 0, 0 }), "└");
-    CHECK_EQ(grid.char_at({ 4, 11, 0 }), "┘");
+    // the title bar: " buf" on a light background, dark text
+    CHECK_EQ(grid.char_at({ 0, 0, 0 }), " ");
+    CHECK_EQ(grid.char_at({ 0, 1, 0 }), "b");
+    CHECK_EQ(grid.char_at({ 0, 2, 0 }), "u");
+    CHECK_EQ(grid.char_at({ 0, 3, 0 }), "f");
+    CHECK_EQ(grid.background_at({ 0, 4, 0 }), theme.color(Theme::Usage::titlebar_background));
+    CHECK_EQ(grid.style_at({ 0, 1, 0 }), theme.color(Theme::Usage::titlebar_text));
+
+    // side borders and the rounded bottom
     CHECK_EQ(grid.char_at({ 1, 0, 0 }), "│");
+    CHECK_EQ(grid.char_at({ 1, 19, 0 }), "│");
+    CHECK_EQ(grid.char_at({ 4, 0, 0 }), "╰");
+    CHECK_EQ(grid.char_at({ 4, 19, 0 }), "╯");
+    CHECK_EQ(grid.char_at({ 4, 5, 0 }), "─");
 
-    // title on the top border, from column 2
-    CHECK_EQ(grid.char_at({ 0, 2, 0 }), "b");
-    CHECK_EQ(grid.char_at({ 0, 3, 0 }), "u");
-    CHECK_EQ(grid.char_at({ 0, 4, 0 }), "f");
-
-    // content inside the border
+    // content inside the chrome
     CHECK_EQ(grid.char_at({ 1, 1, 0 }), "h");
     CHECK_EQ(grid.char_at({ 1, 5, 0 }), "o");
     CHECK_EQ(grid.char_at({ 2, 1, 0 }), "w");
 }
 
-TEST_CASE("core::Pane focused border uses the focused color") {
-    Grid grid { 8, 4 };
+TEST_CASE("core::Pane title bar buttons: F floats, x closes, both red") {
+    Grid grid { 20, 5 };
+    Theme const theme;
+    Pane pane { PaneType::edit, make_buffer("x") };
+    Rectangle const area { { 0, 0, 0 }, 20, 5 };
+
+    // geometry: " F " at columns 12-14, " x " at 16-18
+    CHECK_EQ(Pane::float_button(area), Rectangle { { 0, 12, 0 }, 3, 1 });
+    CHECK_EQ(Pane::close_button(area), Rectangle { { 0, 16, 0 }, 3, 1 });
+
+    pane.draw(grid, area, false, theme);
+    CHECK_EQ(grid.char_at({ 0, 13, 0 }), "F");
+    CHECK_EQ(grid.char_at({ 0, 17, 0 }), "x");
+    Color const red { theme.color(Theme::Usage::titlebar_button_background) };
+    CHECK_EQ(grid.background_at({ 0, 12, 0 }), red);
+    CHECK_EQ(grid.background_at({ 0, 13, 0 }), red);
+    CHECK_EQ(grid.background_at({ 0, 17, 0 }), red);
+
+    // too narrow for buttons: bare bar, zero-sized rectangles
+    Rectangle const narrow { { 0, 0, 0 }, 10, 5 };
+    CHECK_EQ(Pane::float_button(narrow).width, 0u);
+    CHECK_EQ(Pane::close_button(narrow).width, 0u);
+}
+
+TEST_CASE("core::Pane focus brightens the bar and colors the border") {
+    Grid grid { 20, 4 };
     Theme const theme;
     Pane pane { PaneType::edit, make_buffer("x") };
 
-    pane.draw(grid, { { 0, 0, 0 }, 8, 4 }, true, theme);
-    Color const focused { grid.style_at({ 0, 0, 0 }) };
-    CHECK_EQ(focused, theme.color(Theme::Usage::border_focused));
+    pane.draw(grid, { { 0, 0, 0 }, 20, 4 }, true, theme);
+    CHECK_EQ(
+        grid.background_at({ 0, 5, 0 }),
+        theme.color(Theme::Usage::titlebar_background_focused)
+    );
+    CHECK_EQ(grid.style_at({ 1, 0, 0 }), theme.color(Theme::Usage::border_focused));
 
-    pane.draw(grid, { { 0, 0, 0 }, 8, 4 }, false, theme);
-    Color const blurred { grid.style_at({ 0, 0, 0 }) };
-    CHECK_EQ(blurred, theme.color(Theme::Usage::border));
+    pane.draw(grid, { { 0, 0, 0 }, 20, 4 }, false, theme);
+    CHECK_EQ(
+        grid.background_at({ 0, 5, 0 }), theme.color(Theme::Usage::titlebar_background)
+    );
+    CHECK_EQ(grid.style_at({ 1, 0, 0 }), theme.color(Theme::Usage::border));
 }
 
 TEST_CASE("core::Pane::set_cursor() clamps to the buffer") {
@@ -152,18 +185,18 @@ TEST_CASE("core::Pane draws the selection with the selection colors") {
 }
 
 TEST_CASE("core::Pane read-only flag shows [ro] in the title") {
-    Grid grid { 16, 4 };
+    Grid grid { 20, 4 };
     Theme const theme;
     Pane pane { PaneType::edit, make_buffer("x") };
     CHECK_FALSE(pane.read_only());
 
     pane.set_read_only(true);
-    pane.draw(grid, { { 0, 0, 0 }, 16, 4 }, false, theme);
-    // title: ┌─buf [ro]─...
-    CHECK_EQ(grid.char_at({ 0, 6, 0 }), "[");
-    CHECK_EQ(grid.char_at({ 0, 7, 0 }), "r");
-    CHECK_EQ(grid.char_at({ 0, 8, 0 }), "o");
-    CHECK_EQ(grid.char_at({ 0, 9, 0 }), "]");
+    pane.draw(grid, { { 0, 0, 0 }, 20, 4 }, false, theme);
+    // bar: " buf [ro]" - the marker starts at column 5
+    CHECK_EQ(grid.char_at({ 0, 5, 0 }), "[");
+    CHECK_EQ(grid.char_at({ 0, 6, 0 }), "r");
+    CHECK_EQ(grid.char_at({ 0, 7, 0 }), "o");
+    CHECK_EQ(grid.char_at({ 0, 8, 0 }), "]");
 }
 
 TEST_CASE("core::Pane tiny areas draw nothing and stay safe") {

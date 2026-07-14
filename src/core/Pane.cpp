@@ -9,12 +9,14 @@ namespace {
 
 using namespace spice::core;
 
-constexpr std::string_view corner_tl { "┌" }; // ┌
-constexpr std::string_view corner_tr { "┐" }; // ┐
-constexpr std::string_view corner_bl { "└" }; // └
-constexpr std::string_view corner_br { "┘" }; // ┘
-constexpr std::string_view edge_h { "─" };    // ─
-constexpr std::string_view edge_v { "│" };    // │
+constexpr std::string_view corner_bl { "╰" }; //!< rounded bottom-left
+constexpr std::string_view corner_br { "╯" }; //!< rounded bottom-right
+constexpr std::string_view edge_h { "─" };
+constexpr std::string_view edge_v { "│" };
+
+//! Buttons are 3 cells wide (" F ", " x "); panes narrower than this
+//! show a bare bar instead.
+constexpr uint32_t min_width_for_buttons { 12 };
 
 auto paint_cell(
     Grid& grid, Position cell, std::string_view glyph, Color style, Color background
@@ -106,6 +108,21 @@ auto Pane::content_area(Rectangle area) -> Rectangle {
     };
 }
 
+auto Pane::float_button(Rectangle area) -> Rectangle {
+    if (area.width < min_width_for_buttons) {
+        return { area.position, 0, 0 };
+    }
+    // " F " sits left of " x ", one cell apart: ... F  x ┃
+    return { { area.position.line, area.position.column + area.width - 8, 0 }, 3, 1 };
+}
+
+auto Pane::close_button(Rectangle area) -> Rectangle {
+    if (area.width < min_width_for_buttons) {
+        return { area.position, 0, 0 };
+    }
+    return { { area.position.line, area.position.column + area.width - 4, 0 }, 3, 1 };
+}
+
 auto Pane::clamp(Position position) const -> Position {
     uint32_t const last_line { _buffer->line_count() - 1 };
     uint32_t const line { position.line < last_line ? position.line : last_line };
@@ -143,39 +160,59 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     };
     Color const text { theme.color(Theme::Usage::text) };
     Color const background { theme.color(Theme::Usage::background) };
+    Color const bar_text { theme.color(Theme::Usage::titlebar_text) };
+    Color const bar_background { theme.color(
+        focused ? Theme::Usage::titlebar_background_focused : Theme::Usage::titlebar_background
+    ) };
+    Color const button_text { theme.color(Theme::Usage::titlebar_button_text) };
+    Color const button_background { theme.color(Theme::Usage::titlebar_button_background) };
 
     uint32_t const top { area.position.line };
     uint32_t const bottom { area.position.line + area.height - 1 };
     uint32_t const left { area.position.column };
     uint32_t const right { area.position.column + area.width - 1 };
 
-    // border with the buffer's name as title; a trailing * marks unsaved
-    // edits on editable buffers, [ro] a read-only pane: ┌ name * [ro] ──┐
-    std::string title { _buffer->name() };
+    // the title bar: dark on light across the whole top row, the buffer's
+    // name on the left (with * for unsaved edits, [ro] for read-only), and
+    // the " F " (float) and " x " (close) buttons on the right, in red
+    std::string title { " " + _buffer->name() };
     if (_buffer->capability() == BufferCapability::editable && _buffer->dirty()) {
         title += " *";
     }
     if (_read_only) {
         title += " [ro]";
     }
-    std::string_view const name { title };
+    Rectangle const float_at { float_button(area) };
+    Rectangle const close_at { close_button(area) };
+    uint32_t const title_end { // don't run into the buttons
+        float_at.width > 0 ? float_at.position.column : right + 1
+    };
     for (uint32_t column { left }; column <= right; ++column) {
-        std::string_view top_glyph { edge_h };
-        uint32_t const title_start { left + 2 };
-        if (column >= title_start && column < title_start + name.size()
-            && area.width > 4) {
-            size_t const index { column - title_start };
-            top_glyph = name.substr(index, 1);
+        Position const cell { top, column, 0 };
+        if (float_at.contains(cell)) {
+            uint32_t const index { column - float_at.position.column };
+            paint_cell(grid, cell, index == 1 ? "F" : " ", button_text, button_background);
+        } else if (close_at.contains(cell)) {
+            uint32_t const index { column - close_at.position.column };
+            paint_cell(grid, cell, index == 1 ? "x" : " ", button_text, button_background);
+        } else if (column - left < title.size() && column < title_end) {
+            paint_cell(
+                grid, cell, std::string_view(title).substr(column - left, 1),
+                bar_text, bar_background
+            );
+        } else {
+            paint_cell(grid, cell, " ", bar_text, bar_background);
         }
-        paint_cell(grid, { top, column, 0 }, top_glyph, border, background);
-        paint_cell(grid, { bottom, column, 0 }, edge_h, border, background);
     }
-    for (uint32_t line { top }; line <= bottom; ++line) {
+
+    // side borders and the rounded bottom
+    for (uint32_t line { top + 1 }; line < bottom; ++line) {
         paint_cell(grid, { line, left, 0 }, edge_v, border, background);
         paint_cell(grid, { line, right, 0 }, edge_v, border, background);
     }
-    paint_cell(grid, { top, left, 0 }, corner_tl, border, background);
-    paint_cell(grid, { top, right, 0 }, corner_tr, border, background);
+    for (uint32_t column { left + 1 }; column < right; ++column) {
+        paint_cell(grid, { bottom, column, 0 }, edge_h, border, background);
+    }
     paint_cell(grid, { bottom, left, 0 }, corner_bl, border, background);
     paint_cell(grid, { bottom, right, 0 }, corner_br, border, background);
 

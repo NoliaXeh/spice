@@ -21,6 +21,11 @@ public:
         cursor,
         border,             //!< pane border, unfocused
         border_focused,     //!< pane border, focused
+        titlebar_text,      //!< pane title bar: dark text...
+        titlebar_background, //!< ...on a light bar, unfocused
+        titlebar_background_focused,
+        titlebar_button_text,       //!< the F / x buttons on the bar
+        titlebar_button_background,
         error,
         warning,
         info,
