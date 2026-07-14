@@ -4,17 +4,20 @@
 #include <cstdint>
 namespace spice::core {
 
+//! Text attributes, one bit per SGR style.
 struct StyleFlags {
     bool bold: 1;
     bool italic: 1;
     bool underline: 1;
     bool strikethrough: 1;
     bool blinking: 1;
-    bool selected: 1;
+    bool selected: 1; //!< rendered as reverse video
 
     auto operator==(StyleFlags const&) const -> bool = default;
 };
 
+//! A truecolor color carrying its style - a "color" in Spice is always
+//! color plus attributes, so a Theme entry can say "bold red".
 struct Color {
     uint8_t r, g, b;
     StyleFlags style;

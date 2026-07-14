@@ -12,38 +12,40 @@
 
 namespace spice::core {
 
-//! Most basic form of text buffering for displaying
+//! The screen model: a 2-D buffer of cells, each holding one UTF-8
+//! character plus a foreground and a background Color. Everything drawn on
+//! screen is composed into a Grid first, then rendered to the terminal.
+//!
 //! @invariant _text_color.size() == _background_color.size()
 //! @invariant _text_color.size() == _width * _height
 //! @invariant _text.size() == _height
 //! @invariant _text[*].size() >= _width
 class Grid {
 public:
-
+    //! A width x height grid of spaces with default (zeroed) colors.
     Grid(uint32_t width, uint32_t height);
 
     auto width() const -> uint32_t;
     auto height() const -> uint32_t;
 
-    //! get char at position
-    //! returns a string_view because utf8 symbols are arbitrary size
-    //! if char is out of bound, returns empty string view
+    //! The character at a position - a string_view, because UTF-8
+    //! characters span one to four bytes. Empty when out of bounds.
     auto char_at(Position position) const -> std::string_view;
+    //! Replaces the character at a position (`text` should be exactly one
+    //! UTF-8 character). False when out of bounds or `text` is empty.
     auto set_text(Position position, std::string_view text) -> bool;
 
-    //! returns empty string_view of out of bound
+    //! A whole line's bytes; empty when out of bounds.
     auto line_at(uint32_t lineno) const -> std::string_view;
 
-    //! get the text color/style at position
-    //! returns a default-constructed Color if out of bound
+    //! The text color/style at a position (default Color if out of bounds).
     auto style_at(Position position) const -> Color;
-    //! returns false if position is out of bound
+    //! False when the position is out of bounds.
     auto set_style(Position position, Color color) -> bool;
 
-    //! get the background color at position
-    //! returns a default-constructed Color if out of bound
+    //! The background color at a position (default Color if out of bounds).
     auto background_at(Position position) const -> Color;
-    //! returns false if position is out of bound
+    //! False when the position is out of bounds.
     auto set_background(Position position, Color color) -> bool;
 
     //! Renders the grid to the current terminal, with the grid's top-left
@@ -69,9 +71,9 @@ private:
     uint32_t _width;
     uint32_t _height;
 
-    std::vector<std::string> _text; //< vector of lines because line widths can change if using utf-8
-    std::vector<Color> _text_color;
-    std::vector<Color> _background_color;
+    std::vector<std::string> _text; //!< one string per line: UTF-8 makes byte widths vary
+    std::vector<Color> _text_color;       //!< flat, row-major, one per cell
+    std::vector<Color> _background_color; //!< flat, row-major, one per cell
 };
 
 }
