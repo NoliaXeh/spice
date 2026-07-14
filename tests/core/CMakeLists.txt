@@ -16,6 +16,7 @@ add_executable(core_test
     test_EventText.cpp
     test_KeyBytes.cpp
     test_Base64.cpp
+    test_PathCompletion.cpp
 )
 
 target_link_libraries(core_test PRIVATE core)

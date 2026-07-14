@@ -16,6 +16,7 @@ add_library(core STATIC
     KeyBytes.cpp
     Editor.cpp
     Base64.cpp
+    PathCompletion.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 
