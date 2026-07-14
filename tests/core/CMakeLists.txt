@@ -12,6 +12,10 @@ add_executable(core_test
     test_Palette.cpp
     test_Pty.cpp
     test_FileIo.cpp
+    test_Editor.cpp
+    test_EventText.cpp
+    test_KeyBytes.cpp
+    test_Base64.cpp
 )
 
 target_link_libraries(core_test PRIVATE core)

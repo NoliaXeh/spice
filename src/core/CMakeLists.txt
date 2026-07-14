@@ -12,6 +12,10 @@ add_library(core STATIC
     Palette.cpp
     Pty.cpp
     FileIo.cpp
+    EventText.cpp
+    KeyBytes.cpp
+    Editor.cpp
+    Base64.cpp
 )
 set_target_properties(core PROPERTIES PREFIX "")
 
