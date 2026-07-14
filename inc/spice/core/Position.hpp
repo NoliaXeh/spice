@@ -4,7 +4,8 @@
 #include <cstdint>
 namespace spice::core {
 
-//! represent a position in a frame/pane/terminal
+//! Represents a position in a frame, pane or terminal (in cells or
+//! characters depending on the consumer).
 struct Position {
     uint32_t line;
     uint32_t column;

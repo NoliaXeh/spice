@@ -9,10 +9,10 @@ namespace spice::core {
 //! This gives information about current terminal
 class TermInfo {
     public:
-    auto width() -> uint32_t;
-    auto height() -> uint32_t;
+    auto width() const -> uint32_t;
+    auto height() const -> uint32_t;
     
-    auto pid() -> pid_t;
+    auto pid() const -> pid_t;
 };
 
 }

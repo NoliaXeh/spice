@@ -12,14 +12,14 @@ auto window_size() -> winsize {
 
 }
 
-auto spice::core::TermInfo::width() -> uint32_t {
+auto spice::core::TermInfo::width() const -> uint32_t {
     return window_size().ws_col;
 }
 
-auto spice::core::TermInfo::height() -> uint32_t {
+auto spice::core::TermInfo::height() const -> uint32_t {
     return window_size().ws_row;
 }
 
-auto spice::core::TermInfo::pid() -> pid_t {
+auto spice::core::TermInfo::pid() const -> pid_t {
     return getpid();
 }

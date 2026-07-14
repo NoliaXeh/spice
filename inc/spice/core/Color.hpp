@@ -8,7 +8,7 @@ struct StyleFlags {
     bool bold: 1;
     bool italic: 1;
     bool underline: 1;
-    bool strikethrought: 1;
+    bool strikethrough: 1;
     bool blinking: 1;
     bool selected: 1;
 

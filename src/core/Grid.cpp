@@ -29,7 +29,7 @@ auto append_sgr(std::string& out, Color style, Color background) -> void {
     if (style.style.bold) out += ";1";
     if (style.style.italic) out += ";3";
     if (style.style.underline) out += ";4";
-    if (style.style.strikethrought) out += ";9";
+    if (style.style.strikethrough) out += ";9";
     if (style.style.blinking) out += ";5";
     if (style.style.selected) out += ";7";
     std::format_to(
@@ -51,15 +51,15 @@ Grid::Grid(uint32_t width, uint32_t height)
     , _background_color(static_cast<size_t>(width) * height)
 {}
 
-auto Grid::width() -> uint32_t {
+auto Grid::width() const -> uint32_t {
     return _width;
 }
 
-auto Grid::height() -> uint32_t {
+auto Grid::height() const -> uint32_t {
     return _height;
 }
 
-auto Grid::char_at(Position position) -> std::string_view {
+auto Grid::char_at(Position position) const -> std::string_view {
     if (!in_bounds(position, _width, _height)) {
         return {};
     }
@@ -88,14 +88,14 @@ auto Grid::set_text(Position position, std::string_view text) -> bool {
     return true;
 }
 
-auto Grid::line_at(uint32_t lineno) -> std::string_view {
+auto Grid::line_at(uint32_t lineno) const -> std::string_view {
     if (lineno >= _height) {
         return {};
     }
     return _text[lineno];
 }
 
-auto Grid::style_at(Position position) -> Color {
+auto Grid::style_at(Position position) const -> Color {
     if (!in_bounds(position, _width, _height)) {
         return {};
     }
@@ -110,7 +110,7 @@ auto Grid::set_style(Position position, Color color) -> bool {
     return true;
 }
 
-auto Grid::background_at(Position position) -> Color {
+auto Grid::background_at(Position position) const -> Color {
     if (!in_bounds(position, _width, _height)) {
         return {};
     }
@@ -125,7 +125,7 @@ auto Grid::set_background(Position position, Color color) -> bool {
     return true;
 }
 
-auto Grid::render(TermInfo& terminfo, Position position) -> void {
+auto Grid::render(TermInfo& terminfo, Position position) const -> void {
     render_rect(terminfo, position, Rectangle {
         .position = { 0, 0, 0 },
         .width = _width,
@@ -133,7 +133,7 @@ auto Grid::render(TermInfo& terminfo, Position position) -> void {
     });
 }
 
-auto Grid::render_cell(TermInfo& terminfo, Position position, Position cell) -> void {
+auto Grid::render_cell(TermInfo& terminfo, Position position, Position cell) const -> void {
     render_rect(terminfo, position, Rectangle {
         .position = { cell.line, cell.column, 0 },
         .width = 1,
@@ -141,7 +141,7 @@ auto Grid::render_cell(TermInfo& terminfo, Position position, Position cell) -> 
     });
 }
 
-auto Grid::render_rect(TermInfo& terminfo, Position position, Rectangle rect) -> void {
+auto Grid::render_rect(TermInfo& terminfo, Position position, Rectangle rect) const -> void {
     uint32_t const term_width { terminfo.width() };
     uint32_t const term_height { terminfo.height() };
 

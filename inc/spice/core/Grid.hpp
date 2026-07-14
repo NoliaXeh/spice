@@ -12,7 +12,7 @@
 
 namespace spice::core {
 
-//! Most basic form of text buffering for diplaying
+//! Most basic form of text buffering for displaying
 //! @invariant _text_color.size() == _background_color.size()
 //! @invariant _text_color.size() == _width * _height
 //! @invariant _text.size() == _height
@@ -22,27 +22,27 @@ public:
 
     Grid(uint32_t width, uint32_t height);
 
-    auto width() -> uint32_t;
-    auto height() -> uint32_t;
+    auto width() const -> uint32_t;
+    auto height() const -> uint32_t;
 
     //! get char at position
     //! returns a string_view because utf8 symbols are arbitrary size
     //! if char is out of bound, returns empty string view
-    auto char_at(Position position) -> std::string_view;
+    auto char_at(Position position) const -> std::string_view;
     auto set_text(Position position, std::string_view text) -> bool;
 
     //! returns empty string_view of out of bound
-    auto line_at(uint32_t lineno) -> std::string_view;
+    auto line_at(uint32_t lineno) const -> std::string_view;
 
     //! get the text color/style at position
     //! returns a default-constructed Color if out of bound
-    auto style_at(Position position) -> Color;
+    auto style_at(Position position) const -> Color;
     //! returns false if position is out of bound
     auto set_style(Position position, Color color) -> bool;
 
     //! get the background color at position
     //! returns a default-constructed Color if out of bound
-    auto background_at(Position position) -> Color;
+    auto background_at(Position position) const -> Color;
     //! returns false if position is out of bound
     auto set_background(Position position, Color color) -> bool;
 
@@ -51,19 +51,19 @@ public:
     //! would fall outside terminfo's current width/height is cropped.
     //! The frame is built in one buffer and written in one call, emitting
     //! color codes only when they change between cells.
-    auto render(TermInfo& terminfo, Position position) -> void;
+    auto render(TermInfo& terminfo, Position position) const -> void;
 
     //! Renders the single cell `cell` of a grid placed at `position`.
     //! This is the cheap path for localized updates (typing, cursor edits):
     //! a handful of bytes instead of a full-screen frame. Cropped like
     //! render(); out-of-grid cells are ignored.
-    auto render_cell(TermInfo& terminfo, Position position, Position cell) -> void;
+    auto render_cell(TermInfo& terminfo, Position position, Position cell) const -> void;
 
     //! Renders only the cells of `rect` (grid coordinates, layers ignored)
     //! of a grid placed at `position`: the partial-update path for damage
     //! bigger than one cell but smaller than the screen. The rectangle is
     //! clipped to the grid, then cropped to the terminal like render().
-    auto render_rect(TermInfo& terminfo, Position position, Rectangle rect) -> void;
+    auto render_rect(TermInfo& terminfo, Position position, Rectangle rect) const -> void;
 
 private:
     uint32_t _width;

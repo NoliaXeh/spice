@@ -80,7 +80,7 @@ TEST_CASE("core::Grid::set_style() and style_at() round-trip") {
     Color const style {
         .r = 10, .g = 20, .b = 30,
         .style = { .bold = true, .italic = false, .underline = true,
-                   .strikethrought = false, .blinking = false, .selected = false },
+                   .strikethrough = false, .blinking = false, .selected = false },
     };
     CHECK(grid.set_style({ 0, 1, 0 }, style));
 
