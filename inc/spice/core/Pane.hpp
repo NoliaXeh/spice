@@ -8,6 +8,8 @@
 #include "spice/core/Theme.hpp"
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <utility>
 
 namespace spice::core {
 
@@ -32,6 +34,16 @@ public:
     //! (column may equal the line length: the insertion point at the end).
     auto cursor() const -> Position;
     auto set_cursor(Position position) -> void;
+
+    //! Selection: the range between an anchor and the cursor. Set the
+    //! anchor where selecting starts (shift-move, mouse press); it stays
+    //! put while the cursor extends the range. No anchor - or anchor equal
+    //! to the cursor - means no selection.
+    auto set_anchor(Position position) -> void;
+    auto clear_anchor() -> void;
+    auto has_anchor() const -> bool;
+    //! The selected range in document order, or nothing.
+    auto selection() const -> std::optional<std::pair<Position, Position>>;
 
     auto scroll() const -> Position;
     //! Scrolls so the buffer's last lines fill the view (scrollback style).
@@ -60,6 +72,7 @@ private:
     std::shared_ptr<Buffer> _buffer;
     Position _cursor { 0, 0, 0 };
     Position _scroll { 0, 0, 0 };
+    std::optional<Position> _anchor;
 };
 
 }

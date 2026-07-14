@@ -49,6 +49,33 @@ auto Pane::set_cursor(Position position) -> void {
     _cursor = clamp(position);
 }
 
+auto Pane::set_anchor(Position position) -> void {
+    _anchor = clamp(position);
+}
+
+auto Pane::clear_anchor() -> void {
+    _anchor.reset();
+}
+
+auto Pane::has_anchor() const -> bool {
+    return _anchor.has_value();
+}
+
+auto Pane::selection() const -> std::optional<std::pair<Position, Position>> {
+    if (!_anchor) {
+        return std::nullopt;
+    }
+    Position const anchor { clamp(*_anchor) }; // the buffer may have changed
+    Position const cursor { clamp(_cursor) };
+    if (anchor == cursor) {
+        return std::nullopt;
+    }
+    if (document_order(anchor, cursor)) {
+        return std::pair { anchor, cursor };
+    }
+    return std::pair { cursor, anchor };
+}
+
 auto Pane::scroll() const -> Position {
     return _scroll;
 }
@@ -148,6 +175,15 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
         scroll_to_cursor(content);
     }
 
+    auto const selected_range { selection() };
+    Color const selection_text { theme.color(Theme::Usage::selection_text) };
+    Color const selection_background { theme.color(Theme::Usage::selection_background) };
+    auto const is_selected = [&](Position in_buffer) -> bool {
+        return selected_range
+            && !document_order(in_buffer, selected_range->first)
+            && document_order(in_buffer, selected_range->second);
+    };
+
     for (uint32_t row { 0 }; row < content.height; ++row) {
         std::string_view const line { _buffer->line(_scroll.line + row) };
         size_t offset { utf8_offset(line, _scroll.column) };
@@ -163,7 +199,14 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
                 glyph = line.substr(offset, utf8_length(line[offset]));
                 offset += glyph.size();
             }
-            paint_cell(grid, cell, glyph, text, background);
+            Position const in_buffer {
+                _scroll.line + row, _scroll.column + column, 0
+            };
+            if (is_selected(in_buffer)) {
+                paint_cell(grid, cell, glyph, selection_text, selection_background);
+            } else {
+                paint_cell(grid, cell, glyph, text, background);
+            }
         }
     }
 }

@@ -112,6 +112,45 @@ TEST_CASE("core::Pane::cursor_screen_position() is the content cell of the curso
     CHECK_EQ(pane.cursor_screen_position(area), Position { 3, 8, 0 });
 }
 
+TEST_CASE("core::Pane selection orders anchor and cursor") {
+    Pane pane { PaneType::edit, make_buffer("hello\nworld") };
+    CHECK_FALSE(pane.selection().has_value());
+
+    pane.set_cursor({ 1, 2, 0 });
+    pane.set_anchor({ 1, 2, 0 }); // anchor == cursor: still no selection
+    CHECK(pane.has_anchor());
+    CHECK_FALSE(pane.selection().has_value());
+
+    pane.set_cursor({ 0, 1, 0 }); // cursor moved before the anchor
+    auto const range { pane.selection() };
+    REQUIRE(range.has_value());
+    CHECK_EQ(range->first, Position { 0, 1, 0 });
+    CHECK_EQ(range->second, Position { 1, 2, 0 });
+
+    pane.clear_anchor();
+    CHECK_FALSE(pane.selection().has_value());
+}
+
+TEST_CASE("core::Pane draws the selection with the selection colors") {
+    Grid grid { 12, 4 };
+    Theme const theme;
+    Pane pane { PaneType::edit, make_buffer("hello") };
+    pane.set_anchor({ 0, 1, 0 });
+    pane.set_cursor({ 0, 3, 0 }); // "el" selected
+
+    pane.draw(grid, { { 0, 0, 0 }, 12, 4 }, true, theme);
+    CHECK_EQ(
+        grid.background_at({ 1, 2, 0 }), // 'e'
+        theme.color(Theme::Usage::selection_background)
+    );
+    CHECK_EQ(
+        grid.background_at({ 1, 3, 0 }), // 'l'
+        theme.color(Theme::Usage::selection_background)
+    );
+    CHECK_EQ(grid.background_at({ 1, 1, 0 }), theme.color(Theme::Usage::background)); // 'h'
+    CHECK_EQ(grid.background_at({ 1, 4, 0 }), theme.color(Theme::Usage::background)); // second 'l'
+}
+
 TEST_CASE("core::Pane tiny areas draw nothing and stay safe") {
     Grid grid { 4, 4 };
     Theme const theme;
