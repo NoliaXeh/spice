@@ -5,8 +5,9 @@ where the project is going; [BUILD.md](BUILD.md) describes how to build it; this
 what exists: the classes, how they relate, and how the terminal is driven at the syscall and
 escape-sequence level.
 
-Everything so far lives in one module, `core` (headers in `inc/spice/core/`, sources in
-`src/core/`, tests in `tests/core/`), plus the executable's `src/main.cpp`.
+The code lives in two modules (headers in `inc/spice/<module>/`, sources in `src/<module>/`,
+tests in `tests/<module>/`): `core`, everything terminal/session/editing, and `config`, the
+configuration system - plus the executable's `src/main.cpp`.
 
 ## The one-glance map
 
@@ -286,6 +287,37 @@ The Master key is `ctrl-space` (CONFIG.md's default) - terminals send it as NUL,
 parser maps to ctrl+`' '`. While the palette is open, main routes every key to it (modal);
 Master toggles it closed again.
 
+## Configuration (spice::config)
+
+CONFIG.md's design, implemented (plugins excepted until they exist). TOML via a vendored
+toml++ (`third_party/tomlplusplus/`, a PRIVATE include of the config library - it never leaks
+into public headers). Two files, exactly as specified:
+
+- `$XDG_CONFIG_HOME/spice/config.toml` (fallback `~/.config/spice/`) - user-owned, never
+  written by Spice. Sections: `[keys]` (`master`, `palette_run`, `palette_bind`),
+  `[[keybind]]` (`key` + `command`, or `key` + `plugin` + `command`, namespaced to
+  `<plugin>.<command>`), `[lifecycle]` (`shutdown_grace`, `sigterm_grace`, "2s"/"250ms"
+  durations) and `[log]` (`level`, `file`, with a leading `$VARIABLE` expanded). Lifecycle
+  and log are parsed and carried in the `Config` for their consumers-to-be (plugin shutdown,
+  the logger); everything else is live today.
+- `$XDG_STATE_HOME/spice/keybinds.toml` (fallback `~/.local/state/spice/`) - Spice-owned,
+  regenerated wholesale by `save_keybinds()` (comments do not survive; the file says so).
+
+`load()` never fails: absent files and bad entries fall back to defaults and are reported in
+`Config::warnings` (surfaced in the event log at startup). Precedence per CONFIG.md:
+config.toml wins - a state keybind whose key the user (or the Master key) holds is dropped.
+
+`KeyName.hpp` translates between config-file key names and event ids, both directions:
+`parse_key("ctrl-space")` → `C-' '` for building the binding map,
+`key_name("C-'u'")` → `ctrl-u` for writing keybinds.toml. Modifiers compose in any order;
+bases are single characters or named keys (`return`, `page-up`, `f1`...).
+
+The binding flow from the README works end to end: in the palette, the `palette_bind` key
+(default shift-return - configure a plain chord on terminals that don't distinguish it)
+arms a bind for the selected command, the next keypress becomes its key, the bind goes live
+immediately and is written to keybinds.toml. Binding a key held by config.toml or the Master
+key is refused with a message saying where the existing binding lives.
+
 ## main.cpp: wiring it together
 
 main.cpp is the composition root: one `App` class owning the session, command registry,
@@ -298,13 +330,14 @@ Startup order matters: query `TermInfo` → build the session (Welcome pane + th
 append-only buffer in a floating grid pane at the bottom right) → enter the alternate screen →
 construct `EventReader` (raw mode) → first full repaint.
 
-Event dispatch is layered. First the modal check: while the palette is open it takes every
-key. Otherwise a table: `event_id()` gives every event a position-independent identity
-string (`C-'w'`, `C-up`, `press left`), and an
-`unordered_map<string, function<void(Event const&)>>` maps those ids to handlers. The
-ctrl-letter bindings just `registry.run()` a command by name - the same shape config keybinds
-will take (`(plugin, command)` by name, per CONFIG.md) - while focus moves and clicks are
-interactive handlers that also track damage. Unbound plain keys fall through to
+Event dispatch is layered. First the modal checks: a pending palette bind captures the next
+key; while the palette is open it takes every key. Otherwise a table: `event_id()` gives
+every event a position-independent identity string (`C-'w'`, `C-up`, `press left`), and an
+`unordered_map<string, function<void(Event const&)>>` maps those ids to command runners. The
+map is built in layers - built-in defaults (a data table), then keybinds.toml, then
+config.toml keybinds, then the Master key - each overriding the last, so every default key
+is user-overridable. Copy/paste keep their terminal meaning on PTY panes (the runner
+forwards the control bytes instead); clicks stay interactive handlers. Unbound plain keys fall through to
 `edit_pane()`, which applies characters/enter/backspace/delete/arrows to the focused pane's
 buffer through the capability-checked `Buffer` API. The same `event_id` feeds `describe()`,
 so the on-screen event log and the dispatcher share one naming scheme.
