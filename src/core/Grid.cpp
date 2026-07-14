@@ -1,5 +1,4 @@
 #include "spice/core/Grid.hpp"
-#include "spice/core/Utf8.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -10,8 +9,6 @@
 namespace {
 
 using spice::core::Color;
-using spice::core::utf8_length;
-using spice::core::utf8_offset;
 
 auto in_bounds(spice::core::Position position, uint32_t width, uint32_t height) -> bool {
     return position.line < height && position.column < width;
@@ -46,7 +43,7 @@ namespace spice::core {
 Grid::Grid(uint32_t width, uint32_t height)
     : _width { width }
     , _height { height }
-    , _text(height, std::string(width, ' '))
+    , _glyphs(static_cast<size_t>(width) * height, " ")
     , _text_color(static_cast<size_t>(width) * height)
     , _background_color(static_cast<size_t>(width) * height)
 {}
@@ -63,36 +60,27 @@ auto Grid::char_at(Position position) const -> std::string_view {
     if (!in_bounds(position, _width, _height)) {
         return {};
     }
-
-    std::string const& line { _text[position.line] };
-    size_t const offset { utf8_offset(line, position.column) };
-    if (offset >= line.size()) {
-        return {};
-    }
-
-    return std::string_view(line).substr(offset, utf8_length(line[offset]));
+    return _glyphs[cell_index(position, _width)];
 }
 
 auto Grid::set_text(Position position, std::string_view text) -> bool {
     if (!in_bounds(position, _width, _height) || text.empty()) {
         return false;
     }
-
-    std::string& line { _text[position.line] };
-    size_t const offset { utf8_offset(line, position.column) };
-    if (offset >= line.size()) {
-        return false;
-    }
-
-    line.replace(offset, utf8_length(line[offset]), text);
+    _glyphs[cell_index(position, _width)] = text;
     return true;
 }
 
-auto Grid::line_at(uint32_t lineno) const -> std::string_view {
+auto Grid::line_text(uint32_t lineno) const -> std::string {
     if (lineno >= _height) {
         return {};
     }
-    return _text[lineno];
+    std::string out;
+    out.reserve(_width);
+    for (uint32_t column { 0 }; column < _width; ++column) {
+        out += _glyphs[cell_index({ lineno, column, 0 }, _width)];
+    }
+    return out;
 }
 
 auto Grid::style_at(Position position) const -> Color {
@@ -172,17 +160,11 @@ auto Grid::render_rect(TermInfo& terminfo, Position position, Rectangle rect) co
             term_row + 1, position.column + first_column + 1
         );
 
-        // walk the line's utf-8 incrementally rather than through char_at,
-        // which would re-scan the line from the start for every cell
-        std::string const& line { _text[row] };
-        size_t offset { utf8_offset(line, first_column) };
-
-        for (uint32_t column { first_column }; column < end_column && offset < line.size(); ++column) {
+        for (uint32_t column { first_column }; column < end_column; ++column) {
             if (position.column + column >= term_width) {
                 break;
             }
 
-            size_t const length { utf8_length(line[offset]) };
             size_t const index { cell_index({ row, column, 0 }, _width) };
             Color const style { _text_color[index] };
             Color const background { _background_color[index] };
@@ -194,8 +176,7 @@ auto Grid::render_rect(TermInfo& terminfo, Position position, Rectangle rect) co
                 first_cell = false;
             }
 
-            frame.append(line, offset, length);
-            offset += length;
+            frame += _glyphs[index];
         }
     }
 
@@ -220,6 +201,7 @@ auto darken_cell(Grid& grid, Position cell) -> void {
 }
 
 auto drop_shadow(Grid& grid, Rectangle rect) -> void {
+    return;
     uint32_t const below { rect.position.line + rect.height };
     uint32_t const beside { rect.position.column + rect.width };
     for (uint32_t column { rect.position.column + 1 }; column <= beside; ++column) {

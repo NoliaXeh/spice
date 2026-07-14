@@ -51,16 +51,16 @@ TEST_CASE("core::Grid::set_text() rejects empty text") {
     CHECK_FALSE(grid.set_text({ 0, 0, 0 }, ""));
 }
 
-TEST_CASE("core::Grid::line_at()") {
+TEST_CASE("core::Grid::line_text()") {
     Grid grid { 3, 2 };
-    CHECK_EQ(grid.line_at(0), "   ");
+    CHECK_EQ(grid.line_text(0), "   ");
     CHECK(grid.set_text({ 1, 1, 0 }, "y"));
-    CHECK_EQ(grid.line_at(1), " y ");
+    CHECK_EQ(grid.line_text(1), " y ");
 }
 
-TEST_CASE("core::Grid::line_at() returns empty out of bounds") {
+TEST_CASE("core::Grid::line_text() returns empty out of bounds") {
     Grid grid { 3, 2 };
-    CHECK(grid.line_at(2).empty());
+    CHECK(grid.line_text(2).empty());
 }
 
 TEST_CASE("core::Grid starts out with a default (zeroed) style and background") {

@@ -15,11 +15,11 @@ namespace spice::core {
 //! The screen model: a 2-D buffer of cells, each holding one UTF-8
 //! character plus a foreground and a background Color. Everything drawn on
 //! screen is composed into a Grid first, then rendered to the terminal.
+//! Cells are stored individually, so reading or writing any cell is O(1) -
+//! panes repaint the grid on every event, so this path must be cheap.
 //!
-//! @invariant _text_color.size() == _background_color.size()
-//! @invariant _text_color.size() == _width * _height
-//! @invariant _text.size() == _height
-//! @invariant _text[*].size() >= _width
+//! @invariant _glyphs.size() == _text_color.size() == _background_color.size()
+//! @invariant _glyphs.size() == _width * _height
 class Grid {
 public:
     //! A width x height grid of spaces with default (zeroed) colors.
@@ -35,8 +35,8 @@ public:
     //! UTF-8 character). False when out of bounds or `text` is empty.
     auto set_text(Position position, std::string_view text) -> bool;
 
-    //! A whole line's bytes; empty when out of bounds.
-    auto line_at(uint32_t lineno) const -> std::string_view;
+    //! A whole line's text, concatenated; empty when out of bounds.
+    auto line_text(uint32_t lineno) const -> std::string;
 
     //! The text color/style at a position (default Color if out of bounds).
     auto style_at(Position position) const -> Color;
@@ -71,7 +71,7 @@ private:
     uint32_t _width;
     uint32_t _height;
 
-    std::vector<std::string> _text; //!< one string per line: UTF-8 makes byte widths vary
+    std::vector<std::string> _glyphs;     //!< flat, row-major, one UTF-8 character per cell
     std::vector<Color> _text_color;       //!< flat, row-major, one per cell
     std::vector<Color> _background_color; //!< flat, row-major, one per cell
 };
