@@ -174,6 +174,7 @@ auto App::open_startup_panes() -> void {
         "events", core::BufferCapability::append_only, "events"
     );
     _log_pane = _session.open_float(core::PaneType::grid, _log_buffer, log_rect());
+    _session.pane(_log_pane)->set_read_only(true);
     _session.focus(welcome);
 }
 
@@ -289,7 +290,7 @@ auto App::register_commands() -> void {
         }
     } });
     _registry.add({ "edit.cut", "Cut selection", [this] {
-        if (auto* pane { _session.focused_pane() }) {
+        if (auto* pane { _session.focused_pane() }; pane != nullptr && !pane->read_only()) {
             if (auto const range { pane->selection() }) {
                 _clipboard = pane->buffer()->text_between(range->first, range->second);
                 push_system_clipboard(_clipboard);
@@ -302,7 +303,7 @@ auto App::register_commands() -> void {
     } });
     _registry.add({ "edit.paste", "Paste", [this] {
         auto* pane { _session.focused_pane() };
-        if (pane == nullptr || _clipboard.empty()) {
+        if (pane == nullptr || pane->read_only() || _clipboard.empty()) {
             return;
         }
         if (auto const range { pane->selection() }) { // paste replaces it
@@ -316,14 +317,14 @@ auto App::register_commands() -> void {
         }
     } });
     _registry.add({ "buffer.undo", "Undo", [this] {
-        if (auto* pane { _session.focused_pane() }) {
+        if (auto* pane { _session.focused_pane() }; pane != nullptr && !pane->read_only()) {
             if (auto const position { pane->buffer()->undo() }) {
                 pane->set_cursor(*position);
             }
         }
     } });
     _registry.add({ "buffer.redo", "Redo", [this] {
-        if (auto* pane { _session.focused_pane() }) {
+        if (auto* pane { _session.focused_pane() }; pane != nullptr && !pane->read_only()) {
             if (auto const position { pane->buffer()->redo() }) {
                 pane->set_cursor(*position);
             }
@@ -420,7 +421,8 @@ auto App::open_list_float(std::string&& name, std::string const& content) -> voi
         _screen.width / 2,
         _screen.height / 2,
     };
-    _session.open_float(core::PaneType::grid, std::move(buffer), rect);
+    uint32_t const id { _session.open_float(core::PaneType::grid, std::move(buffer), rect) };
+    _session.pane(id)->set_read_only(true);
 }
 
 // -- damage tracking ---------------------------------------------------
