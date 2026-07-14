@@ -15,6 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include "spice/config/Config.hpp"
+#include "spice/config/KeyName.hpp"
 #include "spice/core/Base64.hpp"
 #include "spice/core/Buffer.hpp"
 #include "spice/core/Command.hpp"
@@ -41,9 +43,28 @@ using core::Position;
 using core::Rectangle;
 using core::Theme;
 
-//! The Master key: a prefix reaching Spice from any pane (CONFIG.md default).
-//! Terminals send ctrl-space as NUL, which parses to this id.
-constexpr std::string_view master_key { "C-' '" };
+//! The built-in key bindings, as data so config keybinds can override any
+//! of them: config-style key name -> command. The Master key (configurable,
+//! ctrl-space by default per CONFIG.md) always opens the palette on top.
+constexpr std::pair<std::string_view, std::string_view> default_bindings[] {
+    { "ctrl-p", "palette.open" }, // some terminals swallow ctrl-space
+    { "alt-p", "palette.open" },  // ...or reserve both
+    { "ctrl-w", "session.close" },
+    { "ctrl-n", "buffer.new" },
+    { "ctrl-x", "pane.close" },
+    { "ctrl-f", "pane.float" },
+    { "ctrl-d", "pane.dock" },
+    { "ctrl-s", "file.save" },
+    { "ctrl-o", "file.open" },
+    { "ctrl-z", "buffer.undo" },
+    { "ctrl-y", "buffer.redo" },
+    { "ctrl-c", "edit.copy" },  // still reaches the child in PTY panes
+    { "ctrl-v", "edit.paste" },
+    { "ctrl-up", "pane.focus_up" },
+    { "ctrl-down", "pane.focus_down" },
+    { "ctrl-left", "pane.focus_left" },
+    { "ctrl-right", "pane.focus_right" },
+};
 
 //! An in-progress mouse drag. Grabbed by the border, a pane moves: floats
 //! follow the pointer, docked panes swap with the drop target. Grabbed by
@@ -89,6 +110,12 @@ private:
     auto mark_focused() -> void;
     //! Runs a command by name and requests a full frame.
     auto run_command(std::string_view name) -> void;
+    //! run_command, except copy/paste on a PTY pane forward the raw bytes.
+    auto run_bound_command(std::string const& name) -> void;
+    //! Appends a note to the event log pane.
+    auto log_note(std::string const& note) -> void;
+    //! The key just pressed while a palette bind was pending.
+    auto finish_bind(core::Event const& event) -> void;
 
     // -- prompts, the file picker and the clipboard -------------------
     //! Opens the palette as a free-text prompt; `action` gets the answer.
@@ -117,8 +144,6 @@ private:
     auto on_click(core::Event const& event) -> void;
     //! Pointer moved or released while dragging.
     auto on_drag(core::MouseEvent const& mouse) -> void;
-    //! Focus movement with border damage on both sides.
-    auto move_focus(core::Direction direction) -> void;
     //! Opens the command palette over the registered commands.
     auto open_palette() -> void;
     //! An unbound key: forwarded to a pty pane, or applied as editing.
@@ -135,6 +160,12 @@ private:
     Theme _theme;
     Rectangle _screen; //!< updated on resize
     Grid _grid;
+
+    config::Config _config;
+    std::string _master_id;       //!< event id of the (configurable) Master key
+    std::string _palette_run_id;  //!< runs the palette selection
+    std::string _palette_bind_id; //!< starts binding a key to the selection
+    std::string _pending_bind;    //!< command waiting for a key to bind to
 
     core::Spice _session { "Spice" };
     std::shared_ptr<core::Buffer> _log_buffer;
@@ -164,10 +195,19 @@ App::App()
     if (!ready()) {
         return;
     }
+    _config = config::load();
+    _master_id = config::parse_key(_config.master).value_or("C-' '");
+    _palette_run_id = config::parse_key(_config.palette_run).value_or("enter");
+    _palette_bind_id = config::parse_key(_config.palette_bind).value_or("S-enter");
+
     _session.set_screen(_screen);
     open_startup_panes();
     register_commands();
     make_bindings();
+
+    for (auto const& warning : _config.warnings) {
+        log_note("config: " + warning);
+    }
 }
 
 auto App::ready() const -> bool {
@@ -189,6 +229,9 @@ auto App::open_startup_panes() -> void {
 
 auto App::register_commands() -> void {
     // session
+    _registry.add({ "palette.open", "Open the command palette", [this] {
+        open_palette();
+    } });
     _registry.add({ "session.close", "Close Spice", [this] { _running = false; } });
     _registry.add({ "session.welcome", "Open Welcome Pane", [this] {
         _session.open_welcome_pane();
@@ -330,66 +373,32 @@ auto App::register_commands() -> void {
 }
 
 auto App::make_bindings() -> void {
-    auto const open = [this](core::Event const&) { open_palette(); };
-    _bindings.emplace(std::string(master_key), open);
-    _bindings.emplace("C-'p'", open); // some terminals swallow ctrl-space
-    _bindings.emplace("M-'p'", open); // ...or reserve both
-
-    auto const command = [this](std::string_view name) {
-        return [this, name](core::Event const&) { run_command(name); };
+    auto const bind = [this](std::string_view name, std::string_view command) {
+        if (auto const id { config::parse_key(std::string(name)) }) {
+            _bindings[*id] = [this, cmd = std::string(command)](core::Event const&) {
+                run_bound_command(cmd);
+            };
+        }
     };
-    _bindings.emplace("C-'w'", command("session.close"));
-    _bindings.emplace("C-'n'", command("buffer.new"));
-    _bindings.emplace("C-'x'", command("pane.close"));
-    _bindings.emplace("C-'f'", command("pane.float"));
-    _bindings.emplace("C-'d'", command("pane.dock"));
-    _bindings.emplace("C-'s'", command("file.save"));
-    _bindings.emplace("C-'o'", command("file.open"));
 
-    _bindings.emplace("C-'z'", [this](core::Event const&) {
-        _registry.run("buffer.undo");
-        mark_focused();
-    });
-    _bindings.emplace("C-'y'", [this](core::Event const&) {
-        _registry.run("buffer.redo");
-        mark_focused();
-    });
+    // defaults first, then Spice-written keybinds, then the user's - each
+    // layer overriding the one below (config.toml always wins)
+    for (auto const& [key, command] : default_bindings) {
+        bind(key, command);
+    }
+    for (auto const& keybind : _config.state_keybinds) {
+        bind(keybind.key, keybind.command);
+    }
+    for (auto const& keybind : _config.user_keybinds) {
+        bind(keybind.key, keybind.command);
+    }
 
-    // copy/paste in edit panes; PTY panes still get the control bytes
-    _bindings.emplace("C-'c'", [this](core::Event const&) {
-        if (auto* pane { _session.focused_pane() };
-            pane != nullptr && pane->type() == core::PaneType::pty) {
-            _session.write_to_pty(_session.focused_id(), "\x03");
-        } else {
-            _registry.run("edit.copy");
-        }
-    });
-    _bindings.emplace("C-'v'", [this](core::Event const&) {
-        if (auto* pane { _session.focused_pane() };
-            pane != nullptr && pane->type() == core::PaneType::pty) {
-            _session.write_to_pty(_session.focused_id(), "\x16");
-        } else {
-            _registry.run("edit.paste");
-            mark_focused();
-        }
-    });
-
-    _bindings.emplace("C-up", [this](core::Event const&) {
-        move_focus(core::Direction::up);
-    });
-    _bindings.emplace("C-down", [this](core::Event const&) {
-        move_focus(core::Direction::down);
-    });
-    _bindings.emplace("C-left", [this](core::Event const&) {
-        move_focus(core::Direction::left);
-    });
-    _bindings.emplace("C-right", [this](core::Event const&) {
-        move_focus(core::Direction::right);
-    });
+    // the Master key always reaches Spice
+    _bindings[_master_id] = [this](core::Event const&) { open_palette(); };
 
     auto const click = [this](core::Event const& event) { on_click(event); };
-    _bindings.emplace("press left", click);
-    _bindings.emplace("C-press left", click);
+    _bindings["press left"] = click;
+    _bindings["C-press left"] = click;
 }
 
 // -- pane and buffer helpers ------------------------------------------
@@ -433,6 +442,70 @@ auto App::mark_focused() -> void {
 auto App::run_command(std::string_view name) -> void {
     _registry.run(name);
     _full_repaint = true;
+}
+
+auto App::run_bound_command(std::string const& name) -> void {
+    // in a PTY pane, copy/paste keys keep their terminal meaning
+    if (auto* pane { _session.focused_pane() };
+        pane != nullptr && pane->type() == core::PaneType::pty) {
+        if (name == "edit.copy") {
+            _session.write_to_pty(_session.focused_id(), "\x03");
+            return;
+        }
+        if (name == "edit.paste") {
+            _session.write_to_pty(_session.focused_id(), "\x16");
+            return;
+        }
+    }
+    run_command(name);
+}
+
+auto App::log_note(std::string const& note) -> void {
+    _log_buffer->append("\n" + note);
+    if (auto* pane { _session.pane(_log_pane) }) {
+        if (auto const area { _session.pane_area(_log_pane) }) {
+            pane->scroll_to_bottom(*area);
+            _damage.push_back(*area);
+        }
+    }
+}
+
+auto App::finish_bind(core::Event const& event) -> void {
+    std::string const command { std::move(_pending_bind) };
+    _pending_bind.clear();
+    _full_repaint = true;
+
+    std::string const id { core::event_id(event) };
+    if (id == "escape") {
+        log_note("bind cancelled");
+        return;
+    }
+    auto const name { config::key_name(id) };
+    if (!name) {
+        log_note("cannot bind that key");
+        return;
+    }
+    if (id == _master_id) {
+        log_note(std::format("refused: {} is the Master key", *name));
+        return;
+    }
+    for (auto const& keybind : _config.user_keybinds) { // config.toml wins
+        if (config::parse_key(keybind.key) == id) {
+            log_note(std::format("refused: {} is bound in config.toml", *name));
+            return;
+        }
+    }
+
+    // record it in the Spice-owned file and make it live right away
+    std::erase_if(_config.state_keybinds, [&](config::Keybind const& keybind) {
+        return config::parse_key(keybind.key) == id;
+    });
+    _config.state_keybinds.push_back({ *name, command });
+    if (!config::save_keybinds(config::keybinds_file_path(), _config.state_keybinds)) {
+        log_note("could not write keybinds.toml");
+    }
+    _bindings[id] = [this, command](core::Event const&) { run_bound_command(command); };
+    log_note(std::format("bound {} to {}", *name, command));
 }
 
 // -- prompts and clipboard ----------------------------------------------
@@ -518,8 +591,10 @@ auto App::on_resize() -> void {
 }
 
 auto App::on_palette_key(core::Event const& event) -> void {
+    std::string const id { core::event_id(event) };
+
     // modal: the palette takes every key; Master closes it again
-    if (core::event_id(event) == master_key) {
+    if (id == _master_id) {
         _palette.close();
         _prompt_action = nullptr;
         _picker_action = nullptr;
@@ -529,7 +604,25 @@ auto App::on_palette_key(core::Event const& event) -> void {
     if (event.type != core::EventType::key) {
         return;
     }
-    switch (_palette.handle(event.key)) {
+
+    // the (configurable) bind key: the next keypress binds the selection
+    if (id == _palette_bind_id && !_palette.is_input() && !_palette.is_picker()) {
+        if (auto const name { _palette.selected_name() }; !name.empty()) {
+            _palette.close();
+            _pending_bind = name;
+            log_note(std::format("press a key to bind '{}' (escape cancels)", name));
+            _damage.push_back(core::Palette::area(_screen));
+        }
+        return;
+    }
+
+    // the (configurable) run key acts like RETURN
+    core::KeyEvent key { event.key };
+    if (id == _palette_run_id) {
+        key = { core::Key::enter, {}, {} };
+    }
+
+    switch (_palette.handle(key)) {
     case core::Palette::Outcome::updated:
         _damage.push_back(core::Palette::area(_screen));
         break;
@@ -663,12 +756,6 @@ auto App::on_drag(core::MouseEvent const& mouse) -> void {
     }
 }
 
-auto App::move_focus(core::Direction direction) -> void {
-    mark_focused(); // old pane loses the focused border
-    _session.move_focus(direction);
-    mark_focused(); // new pane gains it
-}
-
 auto App::open_palette() -> void {
     std::vector<core::Palette::Item> items;
     items.reserve(_registry.commands().size());
@@ -718,6 +805,8 @@ auto App::handle(core::Event const& event) -> void {
 
     if (event.type == core::EventType::resize) {
         on_resize();
+    } else if (!_pending_bind.empty() && event.type == core::EventType::key) {
+        finish_bind(event); // the next key belongs to the palette's bind flow
     } else if (_palette.is_open()) {
         on_palette_key(event);
     } else if (event.type == core::EventType::mouse && _drag.active) {
