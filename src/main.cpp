@@ -3,6 +3,7 @@
 //! application - session, built-in commands, palette, key bindings and the
 //! event loop. Everything reusable lives in core; this file only assembles.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -890,13 +891,14 @@ auto App::on_unbound_key(core::KeyEvent const& key) -> void {
 }
 
 auto App::handle(core::Event const& event) -> void {
-    // every event lands in the log buffer, pane or no pane
-    _log_buffer->append("\n" + core::describe(event));
-    if (auto* pane { _session.pane(_log_pane) }) {
-        if (auto const area { _session.pane_area(_log_pane) }) {
-            pane->scroll_to_bottom(*area);
-            _damage.push_back(*area);
-        }
+    // every event lands in the log buffer, pane or no pane - except mouse
+    // motion, which floods by the dozen during drags and is pure noise
+    bool const motion {
+        event.type == core::EventType::mouse
+        && event.mouse.action == core::MouseAction::move
+    };
+    if (!motion) {
+        log_note(core::describe(event));
     }
 
     if (event.type == core::EventType::resize) {
@@ -918,12 +920,31 @@ auto App::handle(core::Event const& event) -> void {
 // -- rendering -----------------------------------------------------------
 
 auto App::repaint(std::vector<Rectangle> const& rects) -> void {
-    for (uint32_t line { 0 }; line < _grid.height(); ++line) {
-        for (uint32_t column { 0 }; column < _grid.width(); ++column) {
-            Position const cell { line, column, 0 };
-            _grid.set_text(cell, " ");
-            _grid.set_style(cell, _theme.color(Theme::Usage::text));
-            _grid.set_background(cell, _theme.color(Theme::Usage::background));
+    // wipe only what will be re-rendered: panes overwrite their own cells,
+    // the clear matters for cells no pane covers any more (a moved float)
+    auto const clear = [this](Rectangle rect) {
+        core::Color const text { _theme.color(Theme::Usage::text) };
+        core::Color const background { _theme.color(Theme::Usage::background) };
+        uint32_t const end_line {
+            std::min(rect.position.line + rect.height, _grid.height())
+        };
+        uint32_t const end_column {
+            std::min(rect.position.column + rect.width, _grid.width())
+        };
+        for (uint32_t line { rect.position.line }; line < end_line; ++line) {
+            for (uint32_t column { rect.position.column }; column < end_column; ++column) {
+                Position const cell { line, column, 0 };
+                _grid.set_text(cell, " ");
+                _grid.set_style(cell, text);
+                _grid.set_background(cell, background);
+            }
+        }
+    };
+    if (rects.empty()) {
+        clear({ { 0, 0, 0 }, _grid.width(), _grid.height() });
+    } else {
+        for (Rectangle const& rect : rects) {
+            clear(rect);
         }
     }
     _session.draw(_grid, _theme);
@@ -967,6 +988,19 @@ auto App::run() -> void {
 
         if (event) {
             handle(*event);
+            // drain the rest of the burst before painting: a fast mouse
+            // drag delivers dozens of events per read, one frame covers all
+            while (_running) {
+                auto const more { reader.poll(0) };
+                if (!more) {
+                    break;
+                }
+                handle(*more);
+            }
+        }
+
+        if (_damage.size() > 8) {
+            _full_repaint = true; // one frame beats re-rendering many rects
         }
         if (_running && (_full_repaint || !_damage.empty() || event)) {
             repaint(_full_repaint ? std::vector<Rectangle> {} : _damage);
