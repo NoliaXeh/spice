@@ -18,6 +18,7 @@ enable_testing()
 # Each module under src/ builds to its own static library, with headers in
 # inc/spice/<module> and tests in tests/<module>. See README.md.
 add_subdirectory(src/core)
+add_subdirectory(src/config)
 
 add_executable(spice src/main.cpp)
-target_link_libraries(spice PRIVATE core)
+target_link_libraries(spice PRIVATE core config)
