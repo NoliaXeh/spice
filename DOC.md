@@ -135,14 +135,15 @@ inert (poll returns nothing), which keeps tests from hanging.
 ## Output path: Grid, Theme, rendering
 
 `Grid` (Grid.cpp) is the screen model: a 2-D buffer of cells, each holding a UTF-8 character
-plus a foreground `Color` and a background `Color`. Text is stored as one `std::string` per
-line (character widths vary); colors as two flat row-major `std::vector<Color>`. Cell
+plus a foreground `Color` and a background `Color`. Every cell is stored individually (a
+flat row-major glyph vector plus two color vectors), so reading or writing any cell is O(1) -
+panes repaint the grid on every event, and this used to be the quadratic hot path. Cell
 accessors: `char_at`/`set_text`, `style_at`/`set_style`, `background_at`/`set_background` -
 all bounds-checked, all addressing columns in characters.
 
 Rendering is one routine, `render_rect(terminfo, position, rect)`; `render()` (whole grid) and
-`render_cell()` (1×1) are thin wrappers over it. Per row it emits one CUP, then walks the
-line's UTF-8 incrementally (never re-scanning from column 0). The whole frame is built in a
+`render_cell()` (1×1) are thin wrappers over it. Per row it emits one CUP, then appends cell
+glyphs directly. The whole frame is built in a
 `std::string` and flushed with a single `fwrite`. Two things keep it fast:
 
 - **SGR coalescing** - a color sequence is emitted only when fg/bg/style differ from the
@@ -360,11 +361,12 @@ outside its content area) starts a drag. While dragging, a floating pane follows
 swaps places with whatever pane it is dropped on (`swap_panes`). A press on content is a
 normal click: focus + cursor placement.
 
-Repaint per event: handlers accumulate damage (`vector<Rectangle>`; layout changes request a
-full frame), then one `repaint()` clears the grid, has the session redraw every pane into it,
-renders only the damaged rects, and parks the terminal cursor on the focused pane's cursor.
-CPU-side drawing is done every event (cheap); terminal I/O is only the damage (the expensive
-part).
+Repaint per batch: the loop drains every already-arrived event before painting (a fast mouse
+drag delivers dozens per read - one frame covers them all), handlers accumulate damage
+(`vector<Rectangle>`; layout changes, or more than 8 rects, request a full frame), then one
+`repaint()` clears the damaged rects, has the session redraw the panes into the grid, renders
+only the damage, and parks the terminal cursor on the focused pane's cursor. Mouse motion is
+not logged to the event pane - it would flood it during drags.
 
 ## Conventions
 
