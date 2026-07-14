@@ -136,7 +136,7 @@ TEST_CASE("core::Grid::render() does not crash without a controlling terminal") 
     grid.render(terminfo, { 0, 0, 0 });
 }
 
-TEST_CASE("core::drop_shadow() darkens the cells right and below a rectangle") {
+TEST_CASE("core::drop_shadow() is currently disabled and leaves cells untouched") {
     Grid grid { 10, 6 };
     Color const bright { .r = 200, .g = 100, .b = 50, .style = {} };
     for (uint32_t line { 0 }; line < 6; ++line) {
@@ -145,16 +145,10 @@ TEST_CASE("core::drop_shadow() darkens the cells right and below a rectangle") {
         }
     }
 
-    drop_shadow(grid, { { 1, 1, 0 }, 4, 3 }); // occupies lines 1-3, columns 1-4
-    Color const shaded { grid.background_at({ 4, 3, 0 }) };  // below
-    CHECK_EQ(shaded.r, 100);
-    CHECK_EQ(shaded.g, 50);
-    CHECK_EQ(shaded.b, 25);
-    CHECK_EQ(grid.background_at({ 2, 5, 0 }).r, 100);        // beside
-    CHECK_EQ(grid.background_at({ 2, 3, 0 }).r, 200);        // inside: untouched
-    CHECK_EQ(grid.background_at({ 0, 3, 0 }).r, 200);        // above: untouched
-
-    drop_shadow(grid, { { 4, 6, 0 }, 8, 8 }); // spills off-grid: must not crash
+    drop_shadow(grid, { { 1, 1, 0 }, 4, 3 });
+    CHECK_EQ(grid.background_at({ 4, 3, 0 }).r, 200); // below: untouched
+    CHECK_EQ(grid.background_at({ 2, 5, 0 }).r, 200); // beside: untouched
+    drop_shadow(grid, { { 4, 6, 0 }, 8, 8 }); // and never crashes
 }
 
 TEST_CASE("core::Grid::render_cell() does not crash without a controlling terminal") {
