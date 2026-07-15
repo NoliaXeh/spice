@@ -10,6 +10,7 @@ Spice is fully TUI.
 
 You can write a plugin in any language, as long as it can talk to Spice over stdin/stdout.
 Plugins read and write buffers, drive panes, and receive events.
+[PLUGIN.md](PLUGIN.md) shows you how, starting from a complete plugin in 50 lines of Python.
 
 ## Buffers and panes
 
