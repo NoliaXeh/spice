@@ -1,5 +1,6 @@
 #include "spice/plugin/MsgPack.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace spice::plugin::msgpack {
@@ -269,12 +270,25 @@ auto sign_extend(uint64_t value, int bytes) -> int64_t {
 
 namespace {
 
-auto decode_array(std::string_view bytes, size_t& offset, size_t size)
+//! Nesting deeper than this is not a protocol message, it is an attack on
+//! the decoder's stack. Real envelopes are a handful of levels deep.
+constexpr int max_depth { 64 };
+
+auto decode_at(std::string_view bytes, size_t& offset, int depth) -> std::optional<Value>;
+
+//! What reserve() may trust from a wire-declared element count: each
+//! element takes at least one byte, so anything beyond the remaining
+//! input is a lie (and would allocate unboundedly before failing).
+auto plausible(size_t declared, std::string_view bytes, size_t offset) -> size_t {
+    return std::min(declared, bytes.size() - offset);
+}
+
+auto decode_array(std::string_view bytes, size_t& offset, size_t size, int depth)
     -> std::optional<Value> {
     Value::Array array;
-    array.reserve(size);
+    array.reserve(plausible(size, bytes, offset));
     for (size_t i { 0 }; i < size; ++i) {
-        auto element { decode(bytes, offset) };
+        auto element { decode_at(bytes, offset, depth) };
         if (!element) {
             return std::nullopt;
         }
@@ -283,13 +297,13 @@ auto decode_array(std::string_view bytes, size_t& offset, size_t size)
     return Value { std::move(array) };
 }
 
-auto decode_map(std::string_view bytes, size_t& offset, size_t size)
+auto decode_map(std::string_view bytes, size_t& offset, size_t size, int depth)
     -> std::optional<Value> {
     Value::Map map;
-    map.reserve(size);
+    map.reserve(plausible(size, bytes, offset));
     for (size_t i { 0 }; i < size; ++i) {
-        auto key { decode(bytes, offset) };
-        auto value { decode(bytes, offset) };
+        auto key { decode_at(bytes, offset, depth) };
+        auto value { decode_at(bytes, offset, depth) };
         if (!key || !value) {
             return std::nullopt;
         }
@@ -298,10 +312,8 @@ auto decode_map(std::string_view bytes, size_t& offset, size_t size)
     return Value::make_map(std::move(map));
 }
 
-}
-
-auto decode(std::string_view bytes, size_t& offset) -> std::optional<Value> {
-    if (offset >= bytes.size()) {
+auto decode_at(std::string_view bytes, size_t& offset, int depth) -> std::optional<Value> {
+    if (depth > max_depth || offset >= bytes.size()) {
         return std::nullopt;
     }
     auto const tag { static_cast<uint8_t>(bytes[offset++]) };
@@ -333,10 +345,10 @@ auto decode(std::string_view bytes, size_t& offset) -> std::optional<Value> {
         return text ? std::optional<Value> { Value { std::move(*text) } } : std::nullopt;
     }
     if ((tag & 0xf0) == 0x90) { // fixarray
-        return decode_array(bytes, offset, tag & 0x0f);
+        return decode_array(bytes, offset, tag & 0x0f, depth + 1);
     }
     if ((tag & 0xf0) == 0x80) { // fixmap
-        return decode_map(bytes, offset, tag & 0x0f);
+        return decode_map(bytes, offset, tag & 0x0f, depth + 1);
     }
 
     switch (tag) {
@@ -385,16 +397,22 @@ auto decode(std::string_view bytes, size_t& offset) -> std::optional<Value> {
     case 0xdc: case 0xdd: {
         auto const size { read_length(tag == 0xdc ? 2 : 4) };
         if (!size) return std::nullopt;
-        return decode_array(bytes, offset, *size);
+        return decode_array(bytes, offset, *size, depth + 1);
     }
     case 0xde: case 0xdf: {
         auto const size { read_length(tag == 0xde ? 2 : 4) };
         if (!size) return std::nullopt;
-        return decode_map(bytes, offset, *size);
+        return decode_map(bytes, offset, *size, depth + 1);
     }
     default:
         return std::nullopt;
     }
+}
+
+}
+
+auto decode(std::string_view bytes, size_t& offset) -> std::optional<Value> {
+    return decode_at(bytes, offset, 0);
 }
 
 auto decode(std::string_view bytes) -> std::optional<Value> {

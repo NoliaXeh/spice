@@ -54,6 +54,10 @@ public:
     //! grace period, pumping poll(), before destroying the host).
     auto shutdown(int grace_ms) -> void;
 
+    //! SIGTERMs every plugin still running - the step between the grace
+    //! period and the destructor's SIGKILL (PROTOCOL.md shutdown order).
+    auto stop_all() -> void;
+
     //! Number of running plugins (for tests and status).
     auto plugin_count() const -> size_t;
 

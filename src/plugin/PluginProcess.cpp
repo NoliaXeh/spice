@@ -1,5 +1,6 @@
 #include "spice/plugin/PluginProcess.hpp"
 
+#include <array>
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
@@ -9,8 +10,24 @@
 
 namespace {
 
+//! A declared frame length past this is a broken or hostile stream: no
+//! protocol message is remotely this large, and honoring it would let a
+//! buggy plugin make the core buffer without bound.
+constexpr size_t max_frame_bytes { 64UL << 20UL };
+
+//! How much one read() pulls off a plugin pipe.
+constexpr size_t read_chunk_bytes { 8192 };
+
 auto set_nonblocking(int fd) -> void {
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+}
+
+//! Close-on-exec, so a pipe never leaks into later-spawned children. A
+//! leaked write end would keep a dead plugin's stdout open in a sibling
+//! and the core would never see EOF - crash detection must not depend on
+//! which plugin spawned first.
+auto set_cloexec(int fd) -> void {
+    fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC);
 }
 
 }
@@ -26,39 +43,44 @@ auto PluginProcess::spawn(std::vector<std::string> const& argv) -> bool {
         return false;
     }
 
-    int to_child[2] {};   // core -> plugin stdin
-    int from_child[2] {}; // plugin stdout -> core
-    int errs[2] {};       // plugin stderr -> core
-    if (pipe(to_child) != 0) {
+    // a plugin dying mid-write must surface as EPIPE, not kill the core
+    signal(SIGPIPE, SIG_IGN);
+
+    std::array<int, 2> to_child {};   // core -> plugin stdin
+    std::array<int, 2> from_child {}; // plugin stdout -> core
+    std::array<int, 2> errs {};       // plugin stderr -> core
+    if (pipe(to_child.data()) != 0) {
         return false;
     }
-    if (pipe(from_child) != 0) {
+    if (pipe(from_child.data()) != 0) {
         close(to_child[0]); close(to_child[1]);
         return false;
     }
-    if (pipe(errs) != 0) {
+    if (pipe(errs.data()) != 0) {
         close(to_child[0]); close(to_child[1]);
         close(from_child[0]); close(from_child[1]);
         return false;
     }
+    for (int const fd : { to_child[0], to_child[1], from_child[0], from_child[1],
+                          errs[0], errs[1] }) {
+        set_cloexec(fd);
+    }
 
     pid_t const pid { fork() };
     if (pid < 0) {
-        for (int fd : { to_child[0], to_child[1], from_child[0], from_child[1],
-                        errs[0], errs[1] }) {
+        for (int const fd : { to_child[0], to_child[1], from_child[0], from_child[1],
+                              errs[0], errs[1] }) {
             close(fd);
         }
         return false;
     }
 
-    if (pid == 0) { // child
+    if (pid == 0) { // child: dup2 clears close-on-exec for 0/1/2; every
+                    // other inherited pipe end closes itself at exec
+        signal(SIGPIPE, SIG_DFL); // the plugin gets default signal behavior
         dup2(to_child[0], STDIN_FILENO);
         dup2(from_child[1], STDOUT_FILENO);
         dup2(errs[1], STDERR_FILENO);
-        for (int fd : { to_child[0], to_child[1], from_child[0], from_child[1],
-                        errs[0], errs[1] }) {
-            close(fd);
-        }
         std::vector<char*> args;
         args.reserve(argv.size() + 1);
         for (auto const& arg : argv) {
@@ -115,11 +137,11 @@ auto PluginProcess::drain_fd(int fd, std::string& into) -> bool {
     if (fd < 0) {
         return false;
     }
-    char buffer[8192];
+    std::array<char, read_chunk_bytes> buffer {};
     while (true) {
-        ssize_t const count { read(fd, buffer, sizeof buffer) };
+        ssize_t const count { read(fd, buffer.data(), buffer.size()) };
         if (count > 0) {
-            into.append(buffer, static_cast<size_t>(count));
+            into.append(buffer.data(), static_cast<size_t>(count));
         } else if (count == 0) {
             return false; // hangup
         } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -139,10 +161,26 @@ auto PluginProcess::poll() -> std::vector<Message> {
     flush_output(); // make progress on anything backed up
     drain_fd(_stderr, _errors);
 
-    if (!drain_fd(_stdout, _incoming)) {
-        waitpid(_pid, nullptr, WNOHANG);
+    bool alive { drain_fd(_stdout, _incoming) };
+    if (alive && _pid > 0 && waitpid(_pid, nullptr, WNOHANG) == _pid) {
+        _pid = -1; // reaped: never signal this (possibly recycled) pid again
+        alive = false;
+    }
+    if (!alive) {
+        if (_pid > 0 && waitpid(_pid, nullptr, WNOHANG) == _pid) {
+            _pid = -1;
+        }
         _running = false;
     }
+
+    // a declared frame length past the cap can never complete: cut the
+    // plugin off rather than buffering forever toward it
+    if (_incoming.size() >= frame_header_bytes
+        && frame_length(_incoming) > max_frame_bytes) {
+        terminate();
+        return messages;
+    }
+
     while (auto message { take_frame(_incoming) }) {
         messages.push_back(std::move(*message));
     }
@@ -172,6 +210,8 @@ auto PluginProcess::terminate() -> void {
         }
     }
     _running = false;
+    _incoming.clear();
+    _outgoing.clear();
 }
 
 }

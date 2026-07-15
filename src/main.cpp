@@ -1365,15 +1365,22 @@ auto App::run() -> void {
         }
     }
 
-    // graceful plugin shutdown: send the event, then keep pumping through
-    // the grace period so a plugin flushing work on the way out completes
-    _host->shutdown(static_cast<int>(_config.shutdown_grace.count()));
-    auto const deadline {
-        std::chrono::steady_clock::now() + _config.shutdown_grace
+    // graceful plugin shutdown, in PROTOCOL.md's order: the shutdown event,
+    // a grace period during which the core keeps processing (a plugin
+    // flushing work on the way out must complete), then SIGTERM, a further
+    // grace, and finally the destructor's SIGKILL for whatever remains
+    auto pump_plugins_for = [this](std::chrono::milliseconds window) {
+        auto const deadline { std::chrono::steady_clock::now() + window };
+        while (_host->plugin_count() > 0 && std::chrono::steady_clock::now() < deadline) {
+            _host->poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
     };
-    while (_host->plugin_count() > 0 && std::chrono::steady_clock::now() < deadline) {
-        _host->poll();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    _host->shutdown(static_cast<int>(_config.shutdown_grace.count()));
+    pump_plugins_for(_config.shutdown_grace);
+    if (_host->plugin_count() > 0) {
+        _host->stop_all();
+        pump_plugins_for(_config.sigterm_grace);
     }
 
     std::print("\x1b[?1049l");

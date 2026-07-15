@@ -347,7 +347,11 @@ read is non-blocking and drained per loop turn, exactly like the PTY pump.
   buffer, waiting for partial ones and dropping malformed envelopes without desyncing.
 - **`PluginProcess`** - a plugin subprocess over three pipes (stdin/stdout for frames, stderr
   captured to the log), all non-blocking; `poll()` returns complete frames and notices hangups,
-  `send()` queues frames, and the child is SIGTERM'd/SIGKILL'd on shutdown.
+  `send()` queues frames, and the child is SIGTERM'd/SIGKILL'd on shutdown. Hardened against
+  the ways a plugin can hurt the core: SIGPIPE from a dead plugin is ignored (a write fails
+  with EPIPE instead of killing Spice), pipes are close-on-exec so one plugin's death is never
+  masked by a sibling holding its fds, frames past 64 MiB cut the plugin off, and the msgpack
+  decoder bounds nesting depth and never trusts wire-declared element counts.
 - **`PluginHost`** - the broker. It spawns plugins, runs the hello/ready handshake with
   major-version negotiation, routes core events to the plugins that subscribed (by topic
   prefix), dispatches plugin→core methods onto `HostServices`, relays `broadcast` between

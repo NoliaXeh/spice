@@ -86,6 +86,23 @@ TEST_CASE("msgpack round-trips a nested envelope") {
     CHECK_EQ(back.as_array()[3]["buffer"].as_int(), 7);
 }
 
+TEST_CASE("msgpack decode refuses hostile input without crashing") {
+    // a nesting bomb: thousands of one-element arrays would otherwise
+    // recurse the decoder off the stack
+    std::string const bomb(100000, '\x91');
+    CHECK_FALSE(decode(bomb).has_value());
+
+    // sane nesting still decodes
+    Value nested { 1 };
+    for (int i { 0 }; i < 20; ++i) {
+        nested = Value { Value::Array { std::move(nested) } };
+    }
+    CHECK(decode(encode(nested)).has_value());
+
+    // an array32 claiming two billion elements must not allocate for them
+    CHECK_FALSE(decode("\xdd\x7f\xff\xff\xff").has_value());
+}
+
 TEST_CASE("msgpack decode advances the offset and rejects garbage") {
     std::string const stream { encode(Value { 1 }) + encode(Value { "next" }) };
     size_t offset { 0 };

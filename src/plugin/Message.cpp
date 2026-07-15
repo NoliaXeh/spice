@@ -36,23 +36,25 @@ auto encode_frame(Message const& message) -> std::string {
     return frame;
 }
 
+auto frame_length(std::string_view buffer) -> size_t {
+    return static_cast<size_t>(static_cast<uint8_t>(buffer[0])) << 24U
+        | static_cast<size_t>(static_cast<uint8_t>(buffer[1])) << 16U
+        | static_cast<size_t>(static_cast<uint8_t>(buffer[2])) << 8U
+        | static_cast<size_t>(static_cast<uint8_t>(buffer[3]));
+}
+
 auto take_frame(std::string& buffer) -> std::optional<Message> {
-    if (buffer.size() < 4) {
+    if (buffer.size() < frame_header_bytes) {
         return std::nullopt;
     }
-    auto const length {
-        static_cast<size_t>(static_cast<uint8_t>(buffer[0])) << 24
-        | static_cast<size_t>(static_cast<uint8_t>(buffer[1])) << 16
-        | static_cast<size_t>(static_cast<uint8_t>(buffer[2])) << 8
-        | static_cast<size_t>(static_cast<uint8_t>(buffer[3]))
-    };
-    if (buffer.size() < 4 + length) {
+    auto const length { frame_length(buffer) };
+    if (buffer.size() < frame_header_bytes + length) {
         return std::nullopt; // the whole frame has not arrived yet
     }
 
-    std::string_view const payload { buffer.data() + 4, length };
+    std::string_view const payload { buffer.data() + frame_header_bytes, length };
     auto const value { msgpack::decode(payload) };
-    buffer.erase(0, 4 + length); // consume the frame either way
+    buffer.erase(0, frame_header_bytes + length); // consume the frame either way
 
     if (!value || !value->is_array() || value->as_array().size() != 4) {
         return std::nullopt; // malformed envelope: dropped

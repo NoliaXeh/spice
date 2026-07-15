@@ -2,9 +2,11 @@
 #define SPICE_PLUGIN_MESSAGE_H
 
 #include "spice/plugin/MsgPack.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <string_view>
 
 namespace spice::plugin {
@@ -32,6 +34,13 @@ struct Message {
     static auto response(uint64_t id, std::string method, msgpack::Value params) -> Message;
     static auto error(std::string method, msgpack::Value params) -> Message;
 };
+
+//! The length prefix in front of every frame: 4 bytes, big-endian.
+inline constexpr size_t frame_header_bytes { 4 };
+
+//! The payload length a frame header declares. `buffer` must hold at
+//! least frame_header_bytes.
+auto frame_length(std::string_view buffer) -> size_t;
 
 //! Encodes a message as one length-prefixed msgpack frame (4-byte
 //! big-endian length + payload), ready to write to a plugin's stdin.

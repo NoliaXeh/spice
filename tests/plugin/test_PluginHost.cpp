@@ -164,6 +164,55 @@ TEST_CASE("plugin host: buffer requests are answered, splices version-checked") 
     CHECK_EQ(services.splice(42, {}, "x", 4, new_version), SpliceStatus::no_such_id);
 }
 
+TEST_CASE("plugin host: dying before the handshake is reported, not silent") {
+    FakeServices services;
+    PluginHost host { services };
+    REQUIRE(host.start({ "broken", { "/bin/false" }, false })); // exits at once
+
+    pump_until(host, [&] { return !services.errors.empty(); });
+    REQUIRE_FALSE(services.errors.empty());
+    CHECK_EQ(services.errors[0], "spice.core.plugin_crashed");
+    CHECK_EQ(host.plugin_count(), 0u);
+}
+
+TEST_CASE("plugin process: a death is noticed even with a sibling running") {
+    // pipe ends must not leak into later children: if plugin B inherited
+    // A's pipes, A's stdout would never reach EOF and A's death would go
+    // unnoticed for as long as B lives
+    PluginProcess first;
+    PluginProcess second;
+    REQUIRE(first.spawn({ greeter_path() }));
+    REQUIRE(second.spawn({ greeter_path() }));
+
+    first.request_stop(); // SIGTERM: the greeter dies, the sibling lives
+    auto const deadline { std::chrono::steady_clock::now() + std::chrono::seconds(2) };
+    while (first.running() && std::chrono::steady_clock::now() < deadline) {
+        first.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK_FALSE(first.running());
+    CHECK(second.running());
+}
+
+TEST_CASE("plugin process: writing to a dead plugin does not kill the core") {
+    PluginProcess process;
+    REQUIRE(process.spawn({ greeter_path() }));
+    process.request_stop();
+    // let the child die but do NOT poll: the process still believes it is
+    // running, so the next send() really writes into the broken pipe -
+    // without SIGPIPE ignored, that terminates this whole test binary
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(process.running()); // dead, but not yet noticed
+    for (int i { 0 }; i < 64; ++i) { // enough to overflow any pipe buffering
+        process.send(Message::event("spice.input.key", Value::object({
+            { "padding", Value { std::string(4096, 'x') } },
+        })));
+    }
+
+    process.poll(); // now it notices
+    CHECK_FALSE(process.running());
+}
+
 TEST_CASE("plugin host: a crash unregisters commands and reports it") {
     FakeServices services;
     PluginHost host { services };

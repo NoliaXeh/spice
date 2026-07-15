@@ -65,9 +65,11 @@ auto PluginHost::poll() -> void {
         }
     }
 
-    // reap the dead: unregister their commands, report, drop them
+    // reap the dead: unregister their commands, report, drop them. A
+    // plugin that died before ready is reported too - crashing on startup
+    // is the failure a user most needs to hear about.
     for (auto& plugin : _plugins) {
-        if (!plugin->process.running() && plugin->ready) {
+        if (!plugin->process.running()) {
             reap(*plugin);
         }
     }
@@ -77,10 +79,14 @@ auto PluginHost::poll() -> void {
 }
 
 auto PluginHost::reap(Plugin& plugin) -> void {
-    _services.unregister_commands(plugin.spec.name, {}); // {} means all of them
+    if (plugin.ready) {
+        _services.unregister_commands(plugin.spec.name, {}); // {}: all of them
+    }
     _services.status_error(
         plugin.spec.name, "spice.core.plugin_crashed",
-        "plugin '" + plugin.spec.name + "' exited"
+        plugin.ready
+            ? "plugin '" + plugin.spec.name + "' exited"
+            : "plugin '" + plugin.spec.name + "' exited before completing its handshake"
     );
     plugin.ready = false;
 }
@@ -98,6 +104,12 @@ auto PluginHost::shutdown(int grace_ms) -> void {
         plugin->process.send(Message::event("spice.lifecycle.shutdown", Value::object({
             { "grace_ms", Value { grace_ms } },
         })));
+    }
+}
+
+auto PluginHost::stop_all() -> void {
+    for (auto& plugin : _plugins) {
+        plugin->process.request_stop();
     }
 }
 
@@ -184,7 +196,12 @@ auto PluginHost::handle_notify(Plugin& plugin, Message const& message) -> void {
     } else if (method == "command.unregister") {
         _services.unregister_commands(name, strings(params["names"]));
     } else if (method == "keybind.set") {
-        _services.set_keybind(name, params["command"].as_string(), params["key"].as_string());
+        // binds target (plugin, command); usually the sender's own, but the
+        // params say so explicitly (PROTOCOL.md: never an id)
+        _services.set_keybind(
+            params["plugin"].as_string(name),
+            params["command"].as_string(), params["key"].as_string()
+        );
     } else if (method == "status.message") {
         _services.status_message(name, params["text"].as_string());
     } else if (method == "status.error") {
