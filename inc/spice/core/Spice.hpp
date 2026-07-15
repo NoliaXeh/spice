@@ -7,6 +7,7 @@
 #include "spice/core/Pane.hpp"
 #include "spice/core/Pty.hpp"
 #include "spice/core/Rectangle.hpp"
+#include "spice/core/Terminal.hpp"
 #include "spice/core/Theme.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -53,13 +54,16 @@ public:
     auto open_welcome_pane() -> uint32_t;
 
     //! Opens a PTY pane running `argv` on a pseudo-terminal sized to the
-    //! pane's content, with an append-only scrollback buffer. Returns the
-    //! pane id, or 0 when the process could not be started.
+    //! pane's content. The pane shows a live emulated terminal screen
+    //! (colors, prompt redraws, full-screen programs); lines scrolling off
+    //! its top land in the pane's append-only scrollback buffer. Returns
+    //! the pane id, or 0 when the process could not be started.
     auto open_pty_pane(std::vector<std::string> const& argv) -> uint32_t;
 
-    //! Drains every running pty into its scrollback (filtered); returns
-    //! the ids of the panes whose buffer changed. A child that hung up
-    //! gets a closing "[exited]" line.
+    //! Feeds every running pty's output to its screen; returns the ids of
+    //! the panes that changed. When a child exits, its final screen is
+    //! dumped into the scrollback with an "[exited]" line and the pane
+    //! falls back to showing that buffer.
     auto pump_ptys() -> std::vector<uint32_t>;
 
     //! Sends bytes to the pty behind a pane; false if it has none running.
@@ -110,7 +114,7 @@ private:
 
     struct PtyEntry {
         Pty pty;
-        PtyFilter filter;
+        Terminal terminal; //!< the pane's live screen
     };
 
     std::string _name;

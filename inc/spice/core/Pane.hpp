@@ -13,6 +13,8 @@
 
 namespace spice::core {
 
+class Terminal;
+
 enum class PaneType : uint8_t {
     edit, //!< text editing; the core handles input and line editing
     grid, //!< raw pane; everything is handled by a plugin
@@ -41,6 +43,11 @@ public:
     //! still change through another pane. Shown as [ro] in the title.
     auto read_only() const -> bool;
     auto set_read_only(bool read_only) -> void;
+
+    //! A PTY pane shows a live emulated screen instead of its scrollback
+    //! buffer while this is set (the session owns the Terminal and clears
+    //! it when the child exits); the cursor comes from the emulator too.
+    auto set_terminal(Terminal const* terminal) -> void;
 
     //! Selection: the range between an anchor and the cursor. Set the
     //! anchor where selecting starts (shift-move, mouse press); it stays
@@ -88,6 +95,7 @@ private:
 
     PaneType _type;
     std::shared_ptr<Buffer> _buffer;
+    Terminal const* _terminal { nullptr };
     bool _read_only { false };
     Position _cursor { 0, 0, 0 };
     Position _scroll { 0, 0, 0 };

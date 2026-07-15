@@ -48,19 +48,6 @@ private:
     bool _running { false };
 };
 
-//! Reduces a terminal byte stream to appendable scrollback text: escape
-//! sequences (CSI, OSC, ESC-prefixed) are stripped, `\r` and other control
-//! bytes are dropped, tabs become spaces, printable text and newlines pass
-//! through. Stateful, because a sequence may split across two reads.
-class PtyFilter {
-public:
-    auto feed(std::string_view bytes) -> std::string;
-
-private:
-    enum class State : uint8_t { ground, escape, csi, osc };
-    State _state { State::ground };
-};
-
 }
 
 #endif // SPICE_CORE_PTY_H

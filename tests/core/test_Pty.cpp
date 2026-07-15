@@ -68,20 +68,3 @@ TEST_CASE("core::Pty::spawn() rejects an empty argv and reports exec failure") {
     }
     CHECK_FALSE(broken.running()); // exec failed, child _exit(127)
 }
-
-TEST_CASE("core::PtyFilter strips escape sequences and control bytes") {
-    PtyFilter filter;
-    CHECK_EQ(filter.feed("plain text\n"), "plain text\n");
-    CHECK_EQ(filter.feed("a\x1b[31mred\x1b[0mb"), "aredb");       // CSI colors
-    CHECK_EQ(filter.feed("x\x1b]0;title\x07y"), "xy");             // OSC title
-    CHECK_EQ(filter.feed("l1\r\nl2\r"), "l1\nl2");                 // \r dropped
-    CHECK_EQ(filter.feed("a\tb"), "a    b");                       // tab to spaces
-    CHECK_EQ(filter.feed("caf\xc3\xa9"), "caf\xc3\xa9");           // utf-8 passes
-    CHECK_EQ(filter.feed("a\x08\x07z"), "az");                     // BS/BEL dropped
-}
-
-TEST_CASE("core::PtyFilter handles a sequence split across feeds") {
-    PtyFilter filter;
-    CHECK_EQ(filter.feed("a\x1b["), "a");
-    CHECK_EQ(filter.feed("31mb"), "b"); // rest of the CSI, then text
-}

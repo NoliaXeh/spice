@@ -1,5 +1,6 @@
 #include "spice/core/Spice.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -114,32 +115,56 @@ auto Spice::open_pty_pane(std::vector<std::string> const& argv) -> uint32_t {
     auto buffer { create_buffer(std::string(argv[0]), BufferCapability::append_only) };
     uint32_t const id { open_pane(PaneType::pty, std::move(buffer)) };
 
-    auto content { Pane::content_area(pane_area(id).value_or(_screen)) };
-    PtyEntry entry;
-    if (!entry.pty.spawn(argv, content.width, content.height)) {
+    auto const content { Pane::content_area(pane_area(id).value_or(_screen)) };
+    uint32_t const columns { std::max(content.width, 1u) };
+    uint32_t const rows { std::max(content.height, 1u) };
+    PtyEntry entry {
+        Pty {},
+        Terminal { columns, rows, colors::light_gray, colors::dark_gray },
+    };
+    if (!entry.pty.spawn(argv, columns, rows)) {
         close_focused_pane(); // could not start: no pane to show
         return 0;
     }
-    _ptys.emplace(id, std::move(entry));
+    auto const [slot, inserted] { _ptys.emplace(id, std::move(entry)) };
+    pane(id)->set_terminal(&slot->second.terminal);
     return id;
 }
 
 auto Spice::pump_ptys() -> std::vector<uint32_t> {
     std::vector<uint32_t> changed;
+    std::vector<uint32_t> dead;
     for (auto& [id, entry] : _ptys) {
+        auto* p { pane(id) };
         std::string const raw { entry.pty.read_output() };
-        std::string text { entry.filter.feed(raw) };
-        if (!entry.pty.running()) {
-            text += "\n[exited]";
-        }
-        if (!text.empty()) {
-            if (auto* p { pane(id) }) {
-                p->buffer()->append(text);
-                changed.push_back(id);
+        if (!raw.empty() && p != nullptr) {
+            entry.terminal.feed(raw);
+            if (auto const answers { entry.terminal.take_responses() }; !answers.empty()) {
+                entry.pty.write_input(answers); // the child asked; reply
             }
+            for (auto const& line : entry.terminal.take_scrollback()) {
+                p->buffer()->append("\n" + line); // history keeps growing
+            }
+            changed.push_back(id);
+        }
+        if (!entry.pty.running()) {
+            if (p != nullptr) {
+                // the live screen goes away: preserve it in the scrollback
+                for (auto const& line : entry.terminal.screen_text()) {
+                    p->buffer()->append("\n" + line);
+                }
+                p->buffer()->append("\n[exited]");
+                p->set_terminal(nullptr);
+                if (std::ranges::find(changed, id) == changed.end()) {
+                    changed.push_back(id);
+                }
+            }
+            dead.push_back(id);
         }
     }
-    std::erase_if(_ptys, [](auto const& item) { return !item.second.pty.running(); });
+    for (uint32_t const id : dead) {
+        _ptys.erase(id);
+    }
     return changed;
 }
 
@@ -152,7 +177,10 @@ auto Spice::resize_ptys() -> void {
     for (auto& [id, entry] : _ptys) {
         if (auto const area { pane_area(id) }) {
             auto const content { Pane::content_area(*area) };
-            entry.pty.resize(content.width, content.height);
+            uint32_t const columns { std::max(content.width, 1u) };
+            uint32_t const rows { std::max(content.height, 1u) };
+            entry.terminal.resize(columns, rows);
+            entry.pty.resize(columns, rows);
         }
     }
 }
@@ -160,6 +188,9 @@ auto Spice::resize_ptys() -> void {
 auto Spice::close_focused_pane() -> void {
     if (_focused == 0) {
         return;
+    }
+    if (auto* p { pane(_focused) }) {
+        p->set_terminal(nullptr); // the entry (and its screen) goes away
     }
     _ptys.erase(_focused); // kills the child; the scrollback buffer stays
     _layout.remove(_focused);

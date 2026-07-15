@@ -1,4 +1,5 @@
 #include "spice/core/Pane.hpp"
+#include "spice/core/Terminal.hpp"
 #include "spice/core/Utf8.hpp"
 
 #include <algorithm>
@@ -58,6 +59,10 @@ auto Pane::read_only() const -> bool {
 
 auto Pane::set_read_only(bool read_only) -> void {
     _read_only = read_only;
+}
+
+auto Pane::set_terminal(Terminal const* terminal) -> void {
+    _terminal = terminal;
 }
 
 auto Pane::set_anchor(Position position) -> void {
@@ -247,6 +252,25 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
         scroll_to_cursor(content);
     }
 
+    if (_terminal != nullptr) { // a live terminal paints its own screen
+        for (uint32_t row { 0 }; row < content.height; ++row) {
+            for (uint32_t column { 0 }; column < content.width; ++column) {
+                auto const& terminal_cell { _terminal->cell(row, column) };
+                bool const in_screen {
+                    row < _terminal->height() && column < _terminal->width()
+                };
+                paint_cell(
+                    grid,
+                    { content.position.line + row, content.position.column + column, 0 },
+                    in_screen ? std::string_view(terminal_cell.glyph) : " ",
+                    in_screen ? terminal_cell.foreground : text,
+                    in_screen ? terminal_cell.background : background
+                );
+            }
+        }
+        return;
+    }
+
     auto const selected_range { selection() };
     Color const selection_text { theme.color(Theme::Usage::selection_text) };
     Color const selection_background { theme.color(Theme::Usage::selection_background) };
@@ -317,6 +341,15 @@ auto Pane::position_from_screen(Rectangle area, Position screen) const -> Positi
 
 auto Pane::cursor_screen_position(Rectangle area) const -> Position {
     auto const content { content_area(area) };
+    if (_terminal != nullptr && content.width > 0 && content.height > 0) {
+        // the emulator knows where its cursor is
+        Position const cursor { _terminal->cursor() };
+        return {
+            content.position.line + std::min(cursor.line, content.height - 1),
+            content.position.column + std::min(cursor.column, content.width - 1),
+            0,
+        };
+    }
     uint32_t const line { _cursor.line - _scroll.line };
     uint32_t const column { _cursor.column - _scroll.column };
     return {
