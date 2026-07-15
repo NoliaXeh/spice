@@ -5,9 +5,10 @@ where the project is going; [BUILD.md](BUILD.md) describes how to build it; this
 what exists: the classes, how they relate, and how the terminal is driven at the syscall and
 escape-sequence level.
 
-The code lives in two modules (headers in `inc/spice/<module>/`, sources in `src/<module>/`,
-tests in `tests/<module>/`): `core`, everything terminal/session/editing, and `config`, the
-configuration system - plus the executable's `src/main.cpp`.
+The code lives in three modules (headers in `inc/spice/<module>/`, sources in `src/<module>/`,
+tests in `tests/<module>/`): `core`, everything terminal/session/editing; `config`, the
+configuration system; and `plugin`, the plugin protocol - plus the executable's `src/main.cpp`
+and reference plugins under `plugins/`.
 
 ## The one-glance map
 
@@ -330,6 +331,46 @@ The binding flow from the README works end to end: in the palette, the `palette_
 arms a bind for the selected command, the next keypress becomes its key, the bind goes live
 immediately and is written to keybinds.toml. Binding a key held by config.toml or the Master
 key is refused with a message saying where the existing binding lives.
+
+## Plugins (spice::plugin)
+
+PROTOCOL.md's design, implemented as a working vertical slice. A plugin is any subprocess that
+speaks the protocol over stdin/stdout; the `plugin` module is the core's side of it. The
+load-bearing invariant - **the core never blocks on a plugin** - is honored throughout: every
+read is non-blocking and drained per loop turn, exactly like the PTY pump.
+
+- **`MsgPack`** - a compact msgpack codec (`Value` + `encode`/`decode`), the wire vocabulary.
+  Full enough for the protocol: nil, bool, int, float, str, bin, array, string-keyed map, and
+  round-trips arbitrary nesting (broadcast payloads are opaque).
+- **`Message`** - the `[kind, id, method, params]` envelope and the length-prefixed framing
+  (4-byte big-endian length + msgpack payload); `take_frame` pulls whole frames off a growing
+  buffer, waiting for partial ones and dropping malformed envelopes without desyncing.
+- **`PluginProcess`** - a plugin subprocess over three pipes (stdin/stdout for frames, stderr
+  captured to the log), all non-blocking; `poll()` returns complete frames and notices hangups,
+  `send()` queues frames, and the child is SIGTERM'd/SIGKILL'd on shutdown.
+- **`PluginHost`** - the broker. It spawns plugins, runs the hello/ready handshake with
+  major-version negotiation, routes core events to the plugins that subscribed (by topic
+  prefix), dispatches plugin→core methods onto `HostServices`, relays `broadcast` between
+  plugins (a dumb prefix broker that never echoes the source and reserves `spice.`), answers
+  `buffer.*` requests, and on a crash unregisters the dead plugin's commands and reports it.
+- **`HostServices`** - the abstract core surface plugins act on (commands, keybinds, status,
+  palette, log, pane ops, buffer read/create/splice). `App` implements it against the live
+  session, so the host stays testable with a fake.
+
+Buffers carry a `version()` bumped on every change: a `buffer.splice` must cite the version it
+saw, and a mismatch is rejected with `spice.core.stale_version` carrying the current version -
+"staleness is loud, never silent" (invariant 4). The protocol addresses columns as UTF-8 byte
+offsets; the App converts to the core's character columns at the boundary.
+
+Plugin commands appear in the palette like built-ins; invoking one emits
+`spice.palette.command_invoked` and the plugin acts, reporting through `status.message` /
+`status.error` (shown in the event log). `plugins/greeter` is a reference plugin - it
+handshakes, registers a command, and on invocation reads the focused buffer and posts its line
+count and version - written against the same codec a plugin in any language would use.
+
+**Deferred** (each additive, per PROTOCOL.md's "Not in v1" plus scope): GridPane `grid.update`
+rendering, incremental `spice.buffer.changed` splice payloads, marks, per-pane plugin mode,
+restart policy enforcement, and `splice_many`.
 
 ## main.cpp: wiring it together
 

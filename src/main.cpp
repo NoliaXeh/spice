@@ -36,6 +36,14 @@
 #include "spice/core/Spice.hpp"
 #include "spice/core/TermInfo.hpp"
 #include "spice/core/Theme.hpp"
+#include "spice/core/Utf8.hpp"
+#include "spice/plugin/HostServices.hpp"
+#include "spice/plugin/MsgPack.hpp"
+#include "spice/plugin/PluginHost.hpp"
+
+#include <chrono>
+#include <memory>
+#include <thread>
 
 #ifndef SPICE_VERSION
 #define SPICE_VERSION "dev"
@@ -155,8 +163,9 @@ struct Drag {
 };
 
 //! The interactive application: owns the session, the command registry, the
-//! palette and the render state, and runs the event loop.
-class App {
+//! palette and the render state, and runs the event loop. It also serves as
+//! the plugin protocol's HostServices, so plugins act on the live session.
+class App : public plugin::HostServices {
 public:
     explicit App(Options const& options);
 
@@ -170,11 +179,55 @@ public:
     //! a terminal: commands are registered on demand).
     auto print_commands() -> void;
 
+    // -- plugin::HostServices (the core surface plugins act on) -----
+    auto register_commands(
+        std::string const& plugin, std::vector<plugin::PluginCommand> const& commands
+    ) -> void override;
+    auto unregister_commands(
+        std::string const& plugin, std::vector<std::string> const& names
+    ) -> void override;
+    auto set_keybind(
+        std::string const& plugin, std::string const& command, std::string const& key
+    ) -> void override;
+    auto status_message(std::string const& plugin, std::string const& text) -> void override;
+    auto status_error(
+        std::string const& plugin, std::string const& code, std::string const& message
+    ) -> void override;
+    auto open_palette() -> void override;
+    auto log(
+        std::string const& plugin, std::string const& level, std::string const& message
+    ) -> void override;
+    auto open_pane(
+        std::string const& kind, std::optional<uint64_t> buffer, std::string const& split
+    ) -> void override;
+    auto close_pane(uint64_t pane) -> void override;
+    auto focus_pane(uint64_t pane) -> void override;
+    auto float_pane(uint64_t pane) -> void override;
+    auto dock_pane(uint64_t pane) -> void override;
+    auto set_pane_buffer(uint64_t pane, uint64_t buffer) -> void override;
+    auto buffer_info(uint64_t buffer) -> std::optional<plugin::BufferInfo> override;
+    auto buffer_lines(uint64_t buffer, uint64_t start, uint64_t end)
+        -> std::optional<std::pair<std::vector<std::string>, uint64_t>> override;
+    auto create_buffer(bool editable, std::string const& name) -> uint64_t override;
+    auto kill_buffer(uint64_t buffer) -> void override;
+    auto splice(
+        uint64_t buffer, plugin::BufferRange range, std::string const& text,
+        uint64_t version, uint64_t& new_version
+    ) -> plugin::SpliceStatus override;
+
 private:
     // -- startup ----------------------------------------------------
     auto open_startup_panes(std::vector<std::string> const& files) -> void;
-    auto register_commands() -> void;
+    auto register_builtin_commands() -> void;
     auto make_bindings() -> void;
+    auto start_plugins() -> void;
+
+    // -- plugin helpers ---------------------------------------------
+    //! A stable protocol id for a core buffer (assigned on first use).
+    auto buffer_id_for(std::shared_ptr<core::Buffer> const& buffer) -> uint64_t;
+    auto buffer_by_id(uint64_t id) -> std::shared_ptr<core::Buffer>;
+    //! Emits a core event to subscribed plugins, if the host is running.
+    auto emit(std::string topic, plugin::msgpack::Value params) -> void;
 
     // -- pane and buffer helpers ------------------------------------
     //! Where the event log float sits: bottom-right corner of the screen.
@@ -223,8 +276,6 @@ private:
     auto on_click(core::Event const& event) -> void;
     //! Pointer moved or released while dragging.
     auto on_drag(core::MouseEvent const& mouse) -> void;
-    //! Opens the command palette over the registered commands.
-    auto open_palette() -> void;
     //! An unbound key: forwarded to a pty pane, or applied as editing.
     auto on_unbound_key(core::KeyEvent const& key) -> void;
     //! One polled event through the whole dispatch chain.
@@ -254,6 +305,12 @@ private:
     core::Palette _palette;
     std::unordered_map<std::string, std::function<void(core::Event const&)>> _bindings;
     std::unordered_map<std::string, std::string> _command_keys; //!< command -> its key name
+
+    std::unique_ptr<plugin::PluginHost> _host;
+    //! registry command name -> (plugin name, plugin's command name)
+    std::unordered_map<std::string, std::pair<std::string, std::string>> _plugin_commands;
+    std::vector<std::weak_ptr<core::Buffer>> _plugin_buffers; //!< index = id - 1
+    uint32_t _last_focused { 0 }; //!< to emit spice.pane.focused on change
 
     bool _running { true };
     uint32_t _scratch_count { 0 };
@@ -288,12 +345,257 @@ App::App(Options const& options)
 
     _session.set_screen(_screen);
     open_startup_panes(options.files);
-    register_commands();
+    register_builtin_commands();
     make_bindings();
 
     for (auto const& warning : _config.warnings) {
         log_note("config: " + warning);
     }
+
+    _host = std::make_unique<plugin::PluginHost>(*this);
+    start_plugins();
+}
+
+auto App::start_plugins() -> void {
+    for (auto const& entry : _config.plugins) {
+        _host->start({ entry.name, entry.command, entry.pane_mode });
+    }
+}
+
+// -- plugin helpers --------------------------------------------------
+
+auto App::buffer_id_for(std::shared_ptr<core::Buffer> const& buffer) -> uint64_t {
+    for (size_t i { 0 }; i < _plugin_buffers.size(); ++i) {
+        if (_plugin_buffers[i].lock() == buffer) {
+            return i + 1;
+        }
+    }
+    _plugin_buffers.push_back(buffer);
+    return _plugin_buffers.size();
+}
+
+auto App::buffer_by_id(uint64_t id) -> std::shared_ptr<core::Buffer> {
+    if (id == 0 || id > _plugin_buffers.size()) {
+        return nullptr;
+    }
+    return _plugin_buffers[id - 1].lock();
+}
+
+auto App::emit(std::string topic, plugin::msgpack::Value params) -> void {
+    if (_host) {
+        _host->emit(topic, std::move(params));
+    }
+}
+
+// -- plugin::HostServices --------------------------------------------
+
+auto App::register_commands(
+    std::string const& plugin, std::vector<plugin::PluginCommand> const& commands
+) -> void {
+    for (auto const& command : commands) {
+        std::string const registry_name { plugin + "/" + command.name };
+        _plugin_commands[registry_name] = { plugin, command.name };
+        _registry.add({ registry_name, command.title, [this, registry_name] {
+            auto const& [plugin_name, command_name] { _plugin_commands.at(registry_name) };
+            plugin::msgpack::Value::Map fields {
+                { "plugin", plugin::msgpack::Value { plugin_name } },
+                { "command", plugin::msgpack::Value { command_name } },
+                { "pane", plugin::msgpack::Value {
+                    static_cast<uint64_t>(_session.focused_id()) } },
+            };
+            if (auto* pane { _session.focused_pane() }) {
+                fields.emplace_back("buffer", plugin::msgpack::Value {
+                    buffer_id_for(pane->buffer()) });
+            }
+            emit("spice.palette.command_invoked", plugin::msgpack::Value::make_map(fields));
+        } });
+    }
+    _full_repaint = true;
+}
+
+auto App::unregister_commands(
+    std::string const& plugin, std::vector<std::string> const& names
+) -> void {
+    auto remove = [this](std::string const& registry_name) {
+        _registry.remove(registry_name);
+        _plugin_commands.erase(registry_name);
+        std::erase_if(_command_keys, [&](auto const& kv) { return kv.first == registry_name; });
+    };
+    if (names.empty()) { // all of the plugin's commands
+        std::vector<std::string> mine;
+        for (auto const& [registry_name, owner] : _plugin_commands) {
+            if (owner.first == plugin) {
+                mine.push_back(registry_name);
+            }
+        }
+        for (auto const& registry_name : mine) {
+            remove(registry_name);
+        }
+    } else {
+        for (auto const& name : names) {
+            remove(plugin + "/" + name);
+        }
+    }
+    _full_repaint = true;
+}
+
+auto App::set_keybind(
+    std::string const& plugin, std::string const& command, std::string const& key
+) -> void {
+    auto const id { config::parse_key(key) };
+    if (!id) {
+        return;
+    }
+    std::string const registry_name { plugin + "/" + command };
+    _bindings[*id] = [this, registry_name](core::Event const&) {
+        run_command(registry_name);
+    };
+    _command_keys[registry_name] = key;
+}
+
+auto App::status_message(std::string const& plugin, std::string const& text) -> void {
+    log_note(plugin + ": " + text);
+}
+
+auto App::status_error(
+    std::string const& plugin, std::string const& code, std::string const& message
+) -> void {
+    log_note(std::format("{}: [{}] {}", plugin, code, message));
+}
+
+auto App::log(
+    std::string const& plugin, std::string const& level, std::string const& message
+) -> void {
+    log_note(std::format("{} [{}] {}", plugin, level, message));
+}
+
+auto App::open_pane(
+    std::string const& kind, std::optional<uint64_t> buffer, std::string const& split
+) -> void {
+    auto content { buffer ? buffer_by_id(*buffer) : nullptr };
+    if (!content) {
+        content = _session.create_buffer("scratch", core::BufferCapability::editable);
+    }
+    core::PaneType const type {
+        kind == "grid" ? core::PaneType::grid
+        : kind == "pty" ? core::PaneType::pty
+        : core::PaneType::edit
+    };
+    if (split == "h" || split == "v") {
+        _session.open_pane(type, std::move(content), split == "h");
+    } else {
+        _session.open_pane(type, std::move(content));
+    }
+    _full_repaint = true;
+}
+
+auto App::close_pane(uint64_t pane) -> void {
+    _session.focus(static_cast<uint32_t>(pane));
+    _session.close_focused_pane();
+    _full_repaint = true;
+}
+
+auto App::focus_pane(uint64_t pane) -> void {
+    _session.focus(static_cast<uint32_t>(pane));
+    _full_repaint = true;
+}
+
+auto App::float_pane(uint64_t pane) -> void {
+    _session.focus(static_cast<uint32_t>(pane));
+    _session.float_focused();
+    _full_repaint = true;
+}
+
+auto App::dock_pane(uint64_t pane) -> void {
+    _session.focus(static_cast<uint32_t>(pane));
+    _session.dock_focused();
+    _full_repaint = true;
+}
+
+auto App::set_pane_buffer(uint64_t pane, uint64_t buffer) -> void {
+    (void)pane;
+    (void)buffer; // the session has no rebind-pane-to-buffer op yet
+}
+
+auto App::buffer_info(uint64_t buffer) -> std::optional<plugin::BufferInfo> {
+    auto const target { buffer_by_id(buffer) };
+    if (!target) {
+        return std::nullopt;
+    }
+    return plugin::BufferInfo {
+        target->version(),
+        target->line_count(),
+        target->capability() == core::BufferCapability::editable,
+        target->dirty(),
+        target->name(),
+    };
+}
+
+auto App::buffer_lines(uint64_t buffer, uint64_t start, uint64_t end)
+    -> std::optional<std::pair<std::vector<std::string>, uint64_t>> {
+    auto const target { buffer_by_id(buffer) };
+    if (!target) {
+        return std::nullopt;
+    }
+    uint64_t const last { end == static_cast<uint64_t>(-1) || end > target->line_count()
+        ? target->line_count() : end };
+    std::vector<std::string> lines;
+    for (uint64_t i { start }; i < last; ++i) {
+        lines.emplace_back(target->line(static_cast<uint32_t>(i)));
+    }
+    return std::pair { std::move(lines), target->version() };
+}
+
+auto App::create_buffer(bool editable, std::string const& name) -> uint64_t {
+    auto buffer { _session.create_buffer(
+        name.empty() ? "plugin-buffer" : std::string(name),
+        editable ? core::BufferCapability::editable : core::BufferCapability::append_only
+    ) };
+    return buffer_id_for(buffer);
+}
+
+auto App::kill_buffer(uint64_t buffer) -> void {
+    (void)buffer; // buffers are owned by the session for the whole run
+}
+
+auto App::splice(
+    uint64_t buffer, plugin::BufferRange range, std::string const& text,
+    uint64_t version, uint64_t& new_version
+) -> plugin::SpliceStatus {
+    auto const target { buffer_by_id(buffer) };
+    if (!target) {
+        return plugin::SpliceStatus::no_such_id;
+    }
+    if (target->capability() != core::BufferCapability::editable) {
+        return plugin::SpliceStatus::capability_denied;
+    }
+    if (version != target->version()) { // staleness is loud, never silent
+        new_version = target->version();
+        return plugin::SpliceStatus::stale_version;
+    }
+
+    // the protocol addresses columns as byte offsets; the core in characters
+    auto to_position = [&](plugin::BufferPosition p) -> core::Position {
+        std::string_view const line { target->line(static_cast<uint32_t>(p.line)) };
+        uint32_t const column { static_cast<uint32_t>(
+            core::utf8_count(line.substr(0, std::min<size_t>(p.column, line.size())))) };
+        return { static_cast<uint32_t>(p.line), column, 0 };
+    };
+    core::Position const begin { to_position(range.start) };
+    core::Position const end { to_position(range.end) };
+
+    if (!(begin == end)) {
+        target->erase_range(begin, end);
+    }
+    if (!text.empty()) {
+        target->insert_block(begin, text);
+    }
+    new_version = target->version();
+    emit("spice.buffer.changed", plugin::msgpack::Value::object({
+        { "buffer", plugin::msgpack::Value { buffer } },
+        { "to_version", plugin::msgpack::Value { new_version } },
+    }));
+    return plugin::SpliceStatus::ok;
 }
 
 auto App::ready() const -> bool {
@@ -302,7 +604,7 @@ auto App::ready() const -> bool {
 
 auto App::print_commands() -> void {
     if (_registry.commands().empty()) {
-        register_commands(); // enumeration needs no terminal
+        register_builtin_commands(); // enumeration needs no terminal
     }
     for (auto const& command : _registry.commands()) {
         std::println("{:<24} {}", command.name, command.title);
@@ -330,7 +632,7 @@ auto App::open_startup_panes(std::vector<std::string> const& files) -> void {
     _session.focus(first);
 }
 
-auto App::register_commands() -> void {
+auto App::register_builtin_commands() -> void {
     // session
     _registry.add({ "palette.open", "Open the command palette", [this] {
         open_palette();
@@ -1023,12 +1325,15 @@ auto App::run() -> void {
 
     repaint({}); // first full frame
 
+    repaint({}); // repaint again once plugins have had a moment (harmless)
+
     while (_running) {
         auto const event { reader.poll(100) };
         _damage.clear();
         _full_repaint = false;
 
-        pump_ptys(); // shells produce output with or without user input
+        pump_ptys();  // shells produce output with or without user input
+        _host->poll(); // and so do plugins (their callbacks queue damage)
 
         if (event) {
             handle(*event);
@@ -1043,12 +1348,32 @@ auto App::run() -> void {
             }
         }
 
+        // let plugins observe a focus change (informational, per PROTOCOL.md)
+        if (_session.focused_id() != _last_focused) {
+            _last_focused = _session.focused_id();
+            emit("spice.pane.focused", plugin::msgpack::Value::object({
+                { "pane", plugin::msgpack::Value {
+                    static_cast<uint64_t>(_last_focused) } },
+            }));
+        }
+
         if (_damage.size() > 8) {
             _full_repaint = true; // one frame beats re-rendering many rects
         }
         if (_running && (_full_repaint || !_damage.empty() || event)) {
             repaint(_full_repaint ? std::vector<Rectangle> {} : _damage);
         }
+    }
+
+    // graceful plugin shutdown: send the event, then keep pumping through
+    // the grace period so a plugin flushing work on the way out completes
+    _host->shutdown(static_cast<int>(_config.shutdown_grace.count()));
+    auto const deadline {
+        std::chrono::steady_clock::now() + _config.shutdown_grace
+    };
+    while (_host->plugin_count() > 0 && std::chrono::steady_clock::now() < deadline) {
+        _host->poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     std::print("\x1b[?1049l");
