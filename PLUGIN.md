@@ -122,25 +122,25 @@ Every payload is an **array of exactly four elements**:
 [ kind, id, method, params ]
 ```
 
-| Field | Type | Meaning |
-|---|---|---|
-| `kind` | integer 0-4 | what sort of message this is (below) |
-| `id` | integer or nil | correlates a request with its response; nil otherwise |
-| `method` | string | the topic (for events) or the method name |
-| `params` | map | the payload; always a map, `{}` when empty |
+| Field    | Type           | Meaning                                               |
+| -------- | -------------- | ----------------------------------------------------- |
+| `kind`   | integer 0-4    | what sort of message this is (below)                  |
+| `id`     | integer or nil | correlates a request with its response; nil otherwise |
+| `method` | string         | the topic (for events) or the method name             |
+| `params` | map            | the payload; always a map, `{}` when empty            |
 
 Map keys are always strings. An envelope that is not a 4-element array is dropped silently - Spice
 will not tell you, it will just look like your message vanished.
 
 ### The five kinds
 
-| Kind | Name | Direction | Answered? |
-|---|---|---|---|
-| `0` | **event** | Spice → you | never |
-| `1` | **notify** | you → Spice | never |
-| `2` | **request** | you → Spice | with a `response` |
-| `3` | **response** | Spice → you | answers your request, carries its `id` |
-| `4` | **error** | Spice → you | unsolicited: your *notify* was bad |
+| Kind | Name         | Direction   | Answered?                              |
+| ---- | ------------ | ----------- | -------------------------------------- |
+| `0`  | **event**    | Spice → you | never                                  |
+| `1`  | **notify**   | you → Spice | never                                  |
+| `2`  | **request**  | you → Spice | with a `response`                      |
+| `3`  | **response** | Spice → you | answers your request, carries its `id` |
+| `4`  | **error**    | Spice → you | unsolicited: your *notify* was bad     |
 
 You only ever *send* kinds `1` and `2`. You only ever *receive* kinds `0`, `3`, and `4`.
 
@@ -447,14 +447,14 @@ naming the offending method:
 
 The codes Spice sends:
 
-| Code | Meaning |
-|---|---|
-| `spice.core.unknown_method` | no such method - typo, or a capability that does not exist yet |
-| `spice.core.no_such_id` | that buffer or pane is gone |
-| `spice.core.stale_version` | your write cited an old version; the current one is in `version` |
-| `spice.core.capability_denied` | that buffer does not accept that (splicing an `append` buffer) |
-| `spice.core.bad_params` | the params were malformed |
-| `spice.core.plugin_crashed` | reported to the *user* about you, not sent to you |
+| Code                           | Meaning                                                          |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `spice.core.unknown_method`    | no such method - typo, or a capability that does not exist yet   |
+| `spice.core.no_such_id`        | that buffer or pane is gone                                      |
+| `spice.core.stale_version`     | your write cited an old version; the current one is in `version` |
+| `spice.core.capability_denied` | that buffer does not accept that (splicing an `append` buffer)   |
+| `spice.core.bad_params`        | the params were malformed                                        |
+| `spice.core.plugin_crashed`    | reported to the *user* about you, not sent to you                |
 
 ---
 
@@ -532,17 +532,17 @@ start with it.
 The protocol describes more than the core currently implements. These are honest gaps - a
 `spice.core.unknown_method` error, or silence, is what you will get:
 
-| Not yet | What that means for you |
-|---|---|
-| `buffer.get_text`, `buffer.splice_many` | use `get_lines` and one `splice` at a time |
-| `spice.buffer.changed` for *user* edits | you cannot react to typing; only your own splices are echoed, without detail |
-| `spice.input.*`, `spice.edit.*` events | no keystroke or edit stream to subscribe to |
-| `pane.set_buffer`, `buffer.kill` | accepted and silently ignored - they do nothing |
-| a command's `description` | accepted, but nothing displays it yet; put what matters in `title` |
-| `grid.update` (drawing to a GridPane) | plugins cannot render custom UI; a plugin's output goes through buffers and status |
-| `mode = "pane"` semantics | parsed and passed in `hello`, but a pane plugin is not yet given its own pane or buffer |
-| `restart` policy | parsed, but a crashed plugin is not restarted |
-| Marks, command cancellation | see PROTOCOL.md's "Not in v1" |
+| Not yet                                 | What that means for you                                                                 |
+| --------------------------------------- | --------------------------------------------------------------------------------------- |
+| `buffer.get_text`, `buffer.splice_many` | use `get_lines` and one `splice` at a time                                              |
+| `spice.buffer.changed` for *user* edits | you cannot react to typing; only your own splices are echoed, without detail            |
+| `spice.input.*`, `spice.edit.*` events  | no keystroke or edit stream to subscribe to                                             |
+| `pane.set_buffer`, `buffer.kill`        | accepted and silently ignored - they do nothing                                         |
+| a command's `description`               | accepted, but nothing displays it yet; put what matters in `title`                      |
+| `grid.update` (drawing to a GridPane)   | plugins cannot render custom UI; a plugin's output goes through buffers and status      |
+| `mode = "pane"` semantics               | parsed and passed in `hello`, but a pane plugin is not yet given its own pane or buffer |
+| `restart` policy                        | parsed, but a crashed plugin is not restarted                                           |
+| Marks, command cancellation             | see PROTOCOL.md's "Not in v1"                                                           |
 
 Each of these is additive: nothing above changes the shape of a message defined in this document.
 A plugin you write today keeps working.
