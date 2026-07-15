@@ -1,6 +1,7 @@
 #include "spice/config/Config.hpp"
 #include "spice/config/KeyName.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
@@ -64,6 +65,67 @@ auto expand_leading_variable(std::string const& path) -> std::string {
         return path;
     }
     return value + (slash == std::string::npos ? "" : path.substr(slash));
+}
+
+auto parse_restart(std::string const& name) -> std::optional<RestartPolicy> {
+    if (name == "never") return RestartPolicy::never;
+    if (name == "on-crash") return RestartPolicy::on_crash;
+    if (name == "always") return RestartPolicy::always;
+    return std::nullopt;
+}
+
+//! [[plugin]] entries from config.toml.
+auto read_plugins(toml::table const& table, std::vector<std::string>& warnings)
+    -> std::vector<PluginEntry> {
+    std::vector<PluginEntry> plugins;
+    auto const* array { table["plugin"].as_array() };
+    if (array == nullptr) {
+        return plugins;
+    }
+    for (auto const& element : *array) {
+        auto const* entry { element.as_table() };
+        if (entry == nullptr) {
+            continue;
+        }
+        PluginEntry plugin;
+        plugin.name = (*entry)["name"].value<std::string>().value_or("");
+
+        if (auto const* command { (*entry)["command"].as_array() }) {
+            for (auto const& arg : *command) {
+                if (auto const value { arg.value<std::string>() }) {
+                    plugin.command.push_back(expand_leading_variable(*value));
+                }
+            }
+        }
+        if (plugin.name.empty() || plugin.command.empty()) {
+            warnings.push_back("plugin entry needs a `name` and a `command`");
+            continue;
+        }
+
+        if (auto const mode { (*entry)["mode"].value<std::string>() }) {
+            if (*mode != "pane" && *mode != "global") {
+                warnings.push_back(std::format("unknown plugin mode '{}'", *mode));
+            }
+            plugin.pane_mode = *mode == "pane";
+        }
+        if (auto const restart { (*entry)["restart"].value<std::string>() }) {
+            if (auto const parsed { parse_restart(*restart) }) {
+                plugin.restart = *parsed;
+            } else {
+                warnings.push_back(std::format("unknown restart policy '{}'", *restart));
+            }
+        }
+        if (auto const max { (*entry)["max_restarts"].value<int64_t>() }) {
+            plugin.max_restarts = static_cast<uint32_t>(std::max<int64_t>(*max, 0));
+        }
+        if (auto const window { (*entry)["restart_window"].value<std::string>() }) {
+            if (auto const parsed { parse_duration(*window) }) {
+                plugin.restart_window = *parsed;
+            }
+        }
+        plugins.push_back(std::move(plugin));
+    }
+    return plugins;
 }
 
 //! [[keybind]] entries from one parsed file.
@@ -154,6 +216,8 @@ auto read_file(std::string const& path, bool full, Config& config) -> std::vecto
         if (auto const value { table["log"]["file"].value<std::string>() }) {
             config.log_file = expand_leading_variable(*value);
         }
+
+        config.plugins = read_plugins(table, config.warnings);
     }
 
     return read_keybinds(table, config.warnings);

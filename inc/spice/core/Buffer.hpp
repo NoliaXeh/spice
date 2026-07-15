@@ -39,6 +39,10 @@ public:
     auto dirty() const -> bool;
     auto mark_saved() -> void;
 
+    //! A counter bumped on every change, whatever the source (the plugin
+    //! protocol's buffer version - a write must cite the version it saw).
+    auto version() const -> uint64_t;
+
     auto line_count() const -> uint32_t;
     //! Returns empty if out of bounds.
     auto line(uint32_t index) const -> std::string_view;
@@ -109,6 +113,7 @@ private:
     BufferCapability _capability;
     std::string _path;
     bool _dirty { false };
+    uint64_t _version { 0 };
     std::vector<std::string> _lines { std::string() };
     std::vector<Edit> _undo;
     std::vector<Edit> _redo;

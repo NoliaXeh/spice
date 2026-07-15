@@ -90,6 +90,39 @@ file  = "/tmp/spice-test.log"
     CHECK(config.warnings.empty());
 }
 
+TEST_CASE("config::load() reads plugin entries") {
+    TempConfigs files;
+    auto const path { files.write("config.toml", R"(
+[[plugin]]
+name    = "files"
+command = ["spice-files"]
+mode    = "pane"
+restart = "on-crash"
+
+[[plugin]]
+name    = "lsp"
+command = ["/usr/local/bin/spice-lsp", "--config", "lsp.toml"]
+mode    = "global"
+restart = "never"
+max_restarts   = 5
+
+[[plugin]]
+command = ["missing-name"]
+)") };
+    auto const config { load(path, files.path("none.toml")) };
+    REQUIRE_EQ(config.plugins.size(), 2u); // the nameless one is dropped
+    CHECK_EQ(config.plugins[0].name, "files");
+    CHECK_EQ(config.plugins[0].command, std::vector<std::string> { "spice-files" });
+    CHECK(config.plugins[0].pane_mode);
+    CHECK_EQ(config.plugins[0].restart, RestartPolicy::on_crash);
+    CHECK_EQ(config.plugins[1].name, "lsp");
+    CHECK_FALSE(config.plugins[1].pane_mode);
+    CHECK_EQ(config.plugins[1].restart, RestartPolicy::never);
+    CHECK_EQ(config.plugins[1].max_restarts, 5u);
+    CHECK_EQ(config.plugins[1].command.size(), 3u);
+    CHECK_EQ(config.warnings.size(), 1u); // the missing name
+}
+
 TEST_CASE("config::load() lets config.toml win over keybinds.toml") {
     TempConfigs files;
     auto const user { files.write("config.toml", R"(

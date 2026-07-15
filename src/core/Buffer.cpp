@@ -68,6 +68,10 @@ auto Buffer::mark_saved() -> void {
     _dirty = false;
 }
 
+auto Buffer::version() const -> uint64_t {
+    return _version;
+}
+
 auto Buffer::line_count() const -> uint32_t {
     return static_cast<uint32_t>(_lines.size());
 }
@@ -256,6 +260,7 @@ auto Buffer::insert_block(Position position, std::string_view text) -> std::opti
 auto Buffer::append(std::string_view text) -> void {
     if (!text.empty()) {
         _dirty = true;
+        ++_version;
     }
     for (char const byte : text) {
         if (byte == '\n') {
@@ -272,6 +277,7 @@ auto Buffer::append(std::string_view text) -> void {
 
 auto Buffer::record(Edit&& edit) -> void {
     _dirty = true;
+    ++_version;
     _redo.clear(); // editing forks history: the undone future is gone
 
     if (!_undo.empty()) { // coalesce runs at one spot into a single edit
@@ -365,6 +371,7 @@ auto Buffer::undo() -> std::optional<Position> {
     Position const position { revert(edit) };
     _redo.push_back(std::move(edit));
     _dirty = true;
+    ++_version;
     return position;
 }
 
@@ -377,6 +384,7 @@ auto Buffer::redo() -> std::optional<Position> {
     Position const position { apply(edit) };
     _undo.push_back(std::move(edit));
     _dirty = true;
+    ++_version;
     return position;
 }
 
