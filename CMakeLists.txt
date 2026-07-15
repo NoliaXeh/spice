@@ -19,7 +19,10 @@ enable_testing()
 # inc/spice/<module> and tests in tests/<module>. See README.md.
 add_subdirectory(src/core)
 add_subdirectory(src/config)
+add_subdirectory(src/plugin)
 
 add_executable(spice src/main.cpp)
-target_link_libraries(spice PRIVATE core config)
+target_link_libraries(spice PRIVATE core config plugin)
+
+add_subdirectory(plugins/greeter)
 target_compile_definitions(spice PRIVATE SPICE_VERSION="${PROJECT_VERSION}")
