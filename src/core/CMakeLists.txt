@@ -11,6 +11,7 @@ add_library(core STATIC
     Command.cpp
     Palette.cpp
     Pty.cpp
+    Terminal.cpp
     FileIo.cpp
     EventText.cpp
     KeyBytes.cpp

@@ -11,6 +11,7 @@ add_executable(core_test
     test_Command.cpp
     test_Palette.cpp
     test_Pty.cpp
+    test_Terminal.cpp
     test_FileIo.cpp
     test_Editor.cpp
     test_EventText.cpp
