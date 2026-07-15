@@ -237,16 +237,21 @@ z-order - `Spice::focus` calls it, so a focused float always sits above the othe
 and `swap` (exchange the places of any two panes - two tiles, two floats, or a tile and a
 float, which trades tiled for floating).
 
-**`Pty` / `PtyFilter`** (Pty.cpp) - the process side of PTY panes. `Pty` runs a child on a
-pseudo-terminal (see the POSIX table above), master side non-blocking: `read_output()` drains,
-`write_input()` forwards, `resize()` re-sizes (the child gets SIGWINCH), `terminate()`
-SIGHUPs/SIGKILLs and reaps. `PtyFilter` reduces the child's byte stream to appendable
-scrollback: escape sequences (CSI/OSC/ESC-prefixed) stripped, control bytes dropped, tabs to
-spaces - deliberately *not* terminal emulation; full-screen programs will look wrong until a
-real emulator lands. The session owns a `Pty`+`PtyFilter` per PTY pane: `open_pty_pane(argv)`
-spawns sized to the pane's content, `pump_ptys()` (called every main-loop turn) appends
-filtered output to the append-only scrollback buffer and reports which panes changed, and
-closing the pane kills the process while the scrollback buffer survives.
+**`Pty` / `Terminal`** (Pty.cpp, Terminal.cpp) - the process and display sides of PTY panes.
+`Pty` runs a child on a pseudo-terminal (see the POSIX table above), master side
+non-blocking: `read_output()` drains, `write_input()` forwards, `resize()` re-sizes (the
+child gets SIGWINCH), `terminate()` SIGHUPs/SIGKILLs and reaps. `Terminal` is a small
+VT/xterm screen emulator: a width x height grid of styled cells plus a cursor, fed the
+child's byte stream - so prompt redraws, backspacing, SGR colors (16/256/truecolor),
+insert/delete of lines and characters, and cursor addressing all render as a terminal would
+show them. It answers device queries (primary/secondary DA, DSR cursor reports) through
+`take_responses()` - written back to the pty, so query-happy shells like fish don't stall -
+and swallows OSC/DCS strings gracefully. Lines scrolling off the top come out of
+`take_scrollback()` into the pane's append-only history buffer, and when the child exits the
+final screen is dumped there with an "[exited]" line, the pane falling back to showing the
+buffer. The session owns a `Pty`+`Terminal` per PTY pane, pumped every main-loop turn; the
+pane draws the live screen with the emulator's own colors and parks the cursor where the
+emulator says.
 
 **`Spice`** (Spice.cpp) - the session tying it together: owns the buffers
 (`vector<shared_ptr<Buffer>>`), the panes (`map<id, Pane>`), the `Layout`, and the focus.
