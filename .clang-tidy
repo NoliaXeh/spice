@@ -1,0 +1,136 @@
+---
+Checks: >
+  -*,
+  cppcoreguidelines-*,
+  modernize-*,
+  google-explicit-constructor,
+  bugprone-*,
+  # Signale les retours de références/pointeurs vers des variables locales
+  clang-analyzer-core.*,
+  clang-analyzer-cplusplus.*,
+  performance-*,
+  readability-*,
+  -readability-identifier-length,
+
+WarningsAsErrors: >
+  cppcoreguidelines-owning-memory,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-pro-type-reinterpret-cast,
+  bugprone-use-after-move,
+  clang-analyzer-cplusplus.NewDeleteLeaks,
+  clang-analyzer-cplusplus.NewDelete,
+  modernize-use-nullptr,
+  cppcoreguidelines-pro-type-vararg
+
+HeaderFilterRegex: '.*\.(h|hpp|hxx|inl)$'
+
+FormatStyle: file
+
+CheckOptions:
+  #  - key: readability-identifier-naming.NamespaceCase
+  #    value: lower_case
+  #  - key: readability-identifier-naming.ClassCase
+  #    value: CamelCase
+  #  - key: readability-identifier-naming.StructCase
+  #    value: CamelCase
+  #  - key: readability-identifier-naming.TemplateParameterCase
+  #    value: CamelCase
+  #  - key: readability-identifier-naming.FunctionCase
+  #    value: lower_case
+  #  - key: readability-identifier-naming.MethodCase
+  #    value: lower_case
+  #  - key: readability-identifier-naming.MemberCase
+  #    value: lower_case
+  #  - key: readability-identifier-naming.MemberSuffix
+  #    value: '_'
+  #  - key: readability-identifier-naming.ParameterCase
+  #    value: lower_case
+  #  - key: readability-identifier-naming.VariableCase
+  #    value: lower_case
+  #  - key: readability-identifier-naming.ConstantCase
+  #    value: UPPER_CASE
+  #  - key: readability-identifier-naming.EnumCase
+  #    value: CamelCase
+  #  - key: readability-identifier-naming.EnumConstantCase
+  #    value: CamelCase
+  #  - key: readability-identifier-naming.TypeAliasCase
+  #    value: lower_case
+  #  - key: readability-identifier-naming.TypeAliasSuffix
+  #    value: '_t'
+  #  - key: readability-identifier-naming.ConceptCase
+  #    value: CamelCase
+  #  - key: readability-identifier-naming.MacroDefinitionCase
+  #    value: UPPER_CASE
+
+  # ---------------------------------------------------------------------------
+  # Taille des fonctions — seuils raisonnables pour du code template-heavy
+  # Les fonctions template peuvent être longues en apparence sans être complexes
+  # ---------------------------------------------------------------------------
+  - key: readability-function-size.LineThreshold
+    value: '80'
+  - key: readability-function-size.StatementThreshold
+    value: '40'
+  - key: readability-function-size.BranchThreshold
+    value: '10'
+  - key: readability-function-size.ParameterThreshold
+    value: '6'
+  - key: readability-function-size.NestingThreshold
+    value: '4'
+
+  # ---------------------------------------------------------------------------
+  # Longueur des identifiants — équilibre expressivité / concision
+  # Les template parameters courts (T, U, N, I) sont légitimes en métaprog
+  # ---------------------------------------------------------------------------
+  - key: readability-identifier-length.MinimumVariableNameLength
+    value: '2'
+  - key: readability-identifier-length.MinimumParameterNameLength
+    value: '2'
+  - key: readability-identifier-length.MinimumLoopCounterNameLength
+    value: '1'
+  - key: readability-identifier-length.IgnoredVariableNames
+    value: '^[ijkn_]$'
+  - key: readability-identifier-length.IgnoredParameterNames
+    value: '^[TUNVI]$'
+
+  # ---------------------------------------------------------------------------
+  # Magic numbers — autoriser les constantes évidentes en métaprog
+  # ---------------------------------------------------------------------------
+  - key: readability-magic-numbers.IgnoredIntegerValues
+    value: '0;1;2;-1'
+  - key: readability-magic-numbers.IgnoredFloatingPointValues
+    value: '0.0;1.0;0.5;2.0;-1.0'
+  - key: readability-magic-numbers.ShortStatementLines
+    value: '0.0;1.0;0.5;2.0;-1.0'
+
+  # ---------------------------------------------------------------------------
+  # Performance — signaler toutes les copies auto dans les range-for
+  # ---------------------------------------------------------------------------
+  - key: performance-for-range-copy.WarnOnAllAutoCopies
+    value: 'true'
+  - key: performance-for-range-copy.AllowedTypes
+    value: ''
+
+  # ---------------------------------------------------------------------------
+  # Narrowing — stricte, mais tolérante sur les conversions de même largeur
+  # (ex: int → unsigned int dans un contexte de bitmask documenté)
+  # ---------------------------------------------------------------------------
+  - key: cppcoreguidelines-narrowing-conversions.WarnOnIntegerNarrowingConversion
+    value: 'true'
+  - key: cppcoreguidelines-narrowing-conversions.WarnOnFloatingPointNarrowingConversion
+    value: 'true'
+  - key: cppcoreguidelines-narrowing-conversions.WarnWithinTemplateInstantiation
+    value: 'true'
+  - key: cppcoreguidelines-narrowing-conversions.WarnOnEquivalentBitWidth
+    value: 'false'
+
+  # ---------------------------------------------------------------------------
+  # Macros autorisées — include guards, assertions, hints de compilation
+  # ---------------------------------------------------------------------------
+  - key: cppcoreguidelines-macro-usage.AllowedRegexp
+    value: '^(ASSERT|EXPECT|DEBUG|NDEBUG|LIKELY|UNLIKELY|ASSUME|UNREACHABLE|FWD).*$'
+
+  # ---------------------------------------------------------------------------
+  # C-arrays — ne pas autoriser les string arrays (utiliser string_view)
+  # ---------------------------------------------------------------------------
+  - key: cppcoreguidelines-avoid-c-arrays.AllowStringArrays
+    value: 'false'

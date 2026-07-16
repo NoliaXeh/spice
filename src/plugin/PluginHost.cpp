@@ -252,93 +252,116 @@ auto PluginHost::handle_notify(Plugin& plugin, Message const& message) -> void {
     }
 }
 
+auto PluginHost::respond(Plugin& plugin, Message const& message, Value result) -> void {
+    plugin.process.send(Message::response(message.id, message.method, std::move(result)));
+}
+
+auto PluginHost::respond_failure(
+    Plugin& plugin, Message const& message, std::string const& code, Value extra
+) -> void {
+    Value::Map fields { { "code", Value { code } } };
+    for (auto const& field : extra.as_map()) {
+        fields.push_back(field);
+    }
+    respond(plugin, message, Value::make_map(std::move(fields)));
+}
+
 auto PluginHost::handle_request(Plugin& plugin, Message const& message) -> void {
-    std::string const& method { message.method };
-    Value const& params { message.params };
-    auto const buffer_id { static_cast<uint64_t>(params["buffer"].as_int()) };
-
-    auto respond = [&](Value result) {
-        plugin.process.send(Message::response(message.id, method, std::move(result)));
-    };
-    auto fail = [&](std::string const& code, Value extra = Value::object({})) {
-        Value::Map fields { { "code", Value { code } } };
-        for (auto const& field : extra.as_map()) {
-            fields.push_back(field);
-        }
-        plugin.process.send(Message::response(message.id, method, Value::make_map(fields)));
-    };
-
     if (!plugin.ready) {
         return;
     }
-
+    std::string const& method { message.method };
     if (method == "buffer.info") {
-        auto const info { _services.buffer_info(buffer_id) };
-        if (!info) {
-            return fail("spice.core.no_such_id");
-        }
-        respond(Value::object({
-            { "line_count", Value { info->line_count } },
-            { "version", Value { info->version } },
-            { "caps", Value { info->editable ? "editable" : "append" } },
-            { "dirty", Value { info->dirty } },
-            { "name", Value { info->name } },
-        }));
+        request_buffer_info(plugin, message);
     } else if (method == "buffer.get_lines") {
-        auto const start { static_cast<uint64_t>(params["start"].as_int()) };
-        auto const end { static_cast<uint64_t>(params["end"].as_int(-1)) };
-        auto const lines { _services.buffer_lines(buffer_id, start, end) };
-        if (!lines) {
-            return fail("spice.core.no_such_id");
-        }
-        Value::Array out;
-        for (auto const& line : lines->first) {
-            out.push_back(Value { line });
-        }
-        respond(Value::object({
-            { "lines", Value { std::move(out) } },
-            { "version", Value { lines->second } },
-        }));
+        request_buffer_lines(plugin, message);
     } else if (method == "buffer.create") {
-        bool const editable { params["caps"].as_string("editable") != "append" };
-        uint64_t const id { _services.create_buffer(editable, params["name"].as_string()) };
-        respond(Value::object({ { "buffer", Value { id } } }));
+        request_buffer_create(plugin, message);
     } else if (method == "buffer.splice") {
-        BufferRange const range {
-            {
-                static_cast<uint64_t>(params["range"]["start"]["line"].as_int()),
-                static_cast<uint64_t>(params["range"]["start"]["col"].as_int()),
-            },
-            {
-                static_cast<uint64_t>(params["range"]["end"]["line"].as_int()),
-                static_cast<uint64_t>(params["range"]["end"]["col"].as_int()),
-            },
-        };
-        uint64_t new_version {};
-        auto const status { _services.splice(
-            buffer_id, range, params["text"].as_string(),
-            static_cast<uint64_t>(params["version"].as_int()), new_version
-        ) };
-        switch (status) {
-        case SpliceStatus::ok:
-            respond(Value::object({ { "version", Value { new_version } } }));
-            break;
-        case SpliceStatus::stale_version:
-            fail("spice.core.stale_version",
-                 Value::object({ { "version", Value { new_version } } }));
-            break;
-        case SpliceStatus::capability_denied:
-            fail("spice.core.capability_denied");
-            break;
-        case SpliceStatus::bad_params:
-            fail("spice.core.bad_params");
-            break;
-        case SpliceStatus::no_such_id:
-            fail("spice.core.no_such_id");
-            break;
-        }
+        request_buffer_splice(plugin, message);
     } else {
-        fail("spice.core.unknown_method");
+        respond_failure(plugin, message, "spice.core.unknown_method");
+    }
+}
+
+auto PluginHost::request_buffer_info(Plugin& plugin, Message const& message) -> void {
+    auto const buffer_id { static_cast<uint64_t>(message.params["buffer"].as_int()) };
+    auto const info { _services.buffer_info(buffer_id) };
+    if (!info) {
+        respond_failure(plugin, message, "spice.core.no_such_id");
+        return;
+    }
+    respond(plugin, message, Value::object({
+        { "line_count", Value { info->line_count } },
+        { "version", Value { info->version } },
+        { "caps", Value { info->editable ? "editable" : "append" } },
+        { "dirty", Value { info->dirty } },
+        { "name", Value { info->name } },
+    }));
+}
+
+auto PluginHost::request_buffer_lines(Plugin& plugin, Message const& message) -> void {
+    Value const& params { message.params };
+    auto const buffer_id { static_cast<uint64_t>(params["buffer"].as_int()) };
+    auto const start { static_cast<uint64_t>(params["start"].as_int()) };
+    auto const end { static_cast<uint64_t>(params["end"].as_int(-1)) };
+    auto const lines { _services.buffer_lines(buffer_id, start, end) };
+    if (!lines) {
+        respond_failure(plugin, message, "spice.core.no_such_id");
+        return;
+    }
+    Value::Array out;
+    for (auto const& line : lines->first) {
+        out.push_back(Value { line });
+    }
+    respond(plugin, message, Value::object({
+        { "lines", Value { std::move(out) } },
+        { "version", Value { lines->second } },
+    }));
+}
+
+auto PluginHost::request_buffer_create(Plugin& plugin, Message const& message) -> void {
+    Value const& params { message.params };
+    bool const editable { params["caps"].as_string("editable") != "append" };
+    uint64_t const id { _services.create_buffer(editable, params["name"].as_string()) };
+    respond(plugin, message, Value::object({ { "buffer", Value { id } } }));
+}
+
+auto PluginHost::request_buffer_splice(Plugin& plugin, Message const& message) -> void {
+    Value const& params { message.params };
+    auto const buffer_id { static_cast<uint64_t>(params["buffer"].as_int()) };
+    BufferRange const range {
+        {
+            static_cast<uint64_t>(params["range"]["start"]["line"].as_int()),
+            static_cast<uint64_t>(params["range"]["start"]["col"].as_int()),
+        },
+        {
+            static_cast<uint64_t>(params["range"]["end"]["line"].as_int()),
+            static_cast<uint64_t>(params["range"]["end"]["col"].as_int()),
+        },
+    };
+    uint64_t new_version {};
+    auto const status { _services.splice(
+        buffer_id, range, params["text"].as_string(),
+        static_cast<uint64_t>(params["version"].as_int()), new_version
+    ) };
+    switch (status) {
+    case SpliceStatus::ok:
+        respond(plugin, message, Value::object({ { "version", Value { new_version } } }));
+        break;
+    case SpliceStatus::stale_version:
+        respond_failure(plugin, message, "spice.core.stale_version",
+                        Value::object({ { "version", Value { new_version } } }));
+        break;
+    case SpliceStatus::capability_denied:
+        respond_failure(plugin, message, "spice.core.capability_denied");
+        break;
+    case SpliceStatus::bad_params:
+        respond_failure(plugin, message, "spice.core.bad_params");
+        break;
+    case SpliceStatus::no_such_id:
+        respond_failure(plugin, message, "spice.core.no_such_id");
+        break;
     }
 }
 

@@ -6,7 +6,7 @@
 namespace spice::core {
 
 auto CommandRegistry::add(Command command) -> bool {
-    if (find(command.name) != nullptr) {
+    if (find(command.name)) {
         return false;
     }
     _commands.push_back(std::move(command));
@@ -24,16 +24,19 @@ auto CommandRegistry::commands() const -> std::vector<Command> const& {
     return _commands;
 }
 
-auto CommandRegistry::find(std::string_view name) const -> Command const* {
+auto CommandRegistry::find(std::string_view name) const -> OptRef<Command const> {
     auto const found {
         std::ranges::find_if(_commands, [&](Command const& c) { return c.name == name; })
     };
-    return found != _commands.end() ? &*found : nullptr;
+    if (found == _commands.end()) {
+        return {};
+    }
+    return *found;
 }
 
 auto CommandRegistry::run(std::string_view name) const -> bool {
-    auto const* command { find(name) };
-    if (command == nullptr || !command->action) {
+    auto const command { find(name) };
+    if (!command || !command->action) {
         return false;
     }
     command->action();

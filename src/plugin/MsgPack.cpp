@@ -312,6 +312,46 @@ auto decode_map(std::string_view bytes, size_t& offset, size_t size, int depth)
     return Value::make_map(std::move(map));
 }
 
+//! Fixed-width scalars: nil, bool, the sized int families and floats.
+//! Nothing when `tag` is not one of them or the input is truncated.
+auto decode_scalar(uint8_t tag, std::string_view bytes, size_t& offset)
+    -> std::optional<Value> {
+    switch (tag) {
+    case 0xc0: return Value {};
+    case 0xc2: return Value { false };
+    case 0xc3: return Value { true };
+    case 0xcc: case 0xcd: case 0xce: case 0xcf: {
+        int const count { 1 << (tag - 0xcc) };
+        uint64_t value {};
+        if (!read_be(bytes, offset, count, value)) return std::nullopt;
+        return Value { static_cast<int64_t>(value) };
+    }
+    case 0xd0: case 0xd1: case 0xd2: case 0xd3: {
+        int const count { 1 << (tag - 0xd0) };
+        uint64_t value {};
+        if (!read_be(bytes, offset, count, value)) return std::nullopt;
+        return Value { sign_extend(value, count) };
+    }
+    case 0xca: {
+        uint64_t word {};
+        if (!read_be(bytes, offset, 4, word)) return std::nullopt;
+        float f {};
+        uint32_t const bits { static_cast<uint32_t>(word) };
+        std::memcpy(&f, &bits, sizeof f);
+        return Value { static_cast<double>(f) };
+    }
+    case 0xcb: {
+        uint64_t bits {};
+        if (!read_be(bytes, offset, 8, bits)) return std::nullopt;
+        double d {};
+        std::memcpy(&d, &bits, sizeof d);
+        return Value { d };
+    }
+    default:
+        return std::nullopt;
+    }
+}
+
 auto decode_at(std::string_view bytes, size_t& offset, int depth) -> std::optional<Value> {
     if (depth > max_depth || offset >= bytes.size()) {
         return std::nullopt;
@@ -352,36 +392,6 @@ auto decode_at(std::string_view bytes, size_t& offset, int depth) -> std::option
     }
 
     switch (tag) {
-    case 0xc0: return Value {};
-    case 0xc2: return Value { false };
-    case 0xc3: return Value { true };
-    case 0xcc: case 0xcd: case 0xce: case 0xcf: {
-        int const count { 1 << (tag - 0xcc) };
-        uint64_t value {};
-        if (!read_be(bytes, offset, count, value)) return std::nullopt;
-        return Value { static_cast<int64_t>(value) };
-    }
-    case 0xd0: case 0xd1: case 0xd2: case 0xd3: {
-        int const count { 1 << (tag - 0xd0) };
-        uint64_t value {};
-        if (!read_be(bytes, offset, count, value)) return std::nullopt;
-        return Value { sign_extend(value, count) };
-    }
-    case 0xca: {
-        uint64_t word {};
-        if (!read_be(bytes, offset, 4, word)) return std::nullopt;
-        float f {};
-        uint32_t const bits { static_cast<uint32_t>(word) };
-        std::memcpy(&f, &bits, sizeof f);
-        return Value { static_cast<double>(f) };
-    }
-    case 0xcb: {
-        uint64_t bits {};
-        if (!read_be(bytes, offset, 8, bits)) return std::nullopt;
-        double d {};
-        std::memcpy(&d, &bits, sizeof d);
-        return Value { d };
-    }
     case 0xd9: case 0xda: case 0xdb: {
         auto const size { read_length(1 << (tag - 0xd9)) };
         if (!size) return std::nullopt;
@@ -405,7 +415,7 @@ auto decode_at(std::string_view bytes, size_t& offset, int depth) -> std::option
         return decode_map(bytes, offset, *size, depth + 1);
     }
     default:
-        return std::nullopt;
+        return decode_scalar(tag, bytes, offset);
     }
 }
 

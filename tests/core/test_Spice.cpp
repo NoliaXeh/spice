@@ -28,7 +28,7 @@ TEST_CASE("core::Spice opens the Welcome pane on request") {
     uint32_t const id { session.open_welcome_pane() };
     CHECK_EQ(session.pane_count(), 1u);
     CHECK_EQ(session.focused_id(), id);
-    REQUIRE_NE(session.focused_pane(), nullptr);
+    REQUIRE(session.focused_pane());
     CHECK_EQ(session.focused_pane()->buffer()->name(), "Welcome");
     CHECK(session.focused_pane()->read_only()); // a greeting, not a scratchpad
     CHECK_EQ(session.pane_area(id), core::Rectangle { { 0, 0, 0 }, 80, 24 });
@@ -212,7 +212,7 @@ TEST_CASE("core::Spice runs a pty pane end to end") {
 
     uint32_t const id { session.open_pty_pane({ "/bin/sh", "-c", "printf 'pty-works\\n'" }) };
     REQUIRE_NE(id, 0u);
-    REQUIRE_NE(session.pane(id), nullptr);
+    REQUIRE(session.pane(id));
     CHECK_EQ(session.pane(id)->type(), core::PaneType::pty);
     CHECK_EQ(session.pane(id)->buffer()->capability(), core::BufferCapability::append_only);
 

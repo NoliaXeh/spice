@@ -74,6 +74,19 @@ private:
     auto handle_notify(Plugin& plugin, Message const& message) -> void;
     auto handle_request(Plugin& plugin, Message const& message) -> void;
     auto handle_ready(Plugin& plugin, msgpack::Value const& params) -> void;
+
+    // handle_request's methods, one each
+    auto request_buffer_info(Plugin& plugin, Message const& message) -> void;
+    auto request_buffer_lines(Plugin& plugin, Message const& message) -> void;
+    auto request_buffer_create(Plugin& plugin, Message const& message) -> void;
+    auto request_buffer_splice(Plugin& plugin, Message const& message) -> void;
+    //! The success response to `message`.
+    auto respond(Plugin& plugin, Message const& message, msgpack::Value result) -> void;
+    //! The failure response: `code` plus whatever `extra` fields.
+    auto respond_failure(
+        Plugin& plugin, Message const& message, std::string const& code,
+        msgpack::Value extra = msgpack::Value::object({})
+    ) -> void;
     auto subscribed(Plugin const& plugin, std::string const& topic) -> bool;
     auto send_error(Plugin& plugin, std::string const& method, std::string const& code)
         -> void;

@@ -1,6 +1,7 @@
 #ifndef SPICE_CORE_COMMAND_H
 #define SPICE_CORE_COMMAND_H
 
+#include "spice/core/OptRef.hpp"
 #include <functional>
 #include <string>
 #include <string_view>
@@ -27,7 +28,7 @@ public:
     auto remove(std::string_view name) -> bool;
 
     auto commands() const -> std::vector<Command> const&;
-    auto find(std::string_view name) const -> Command const*;
+    auto find(std::string_view name) const -> OptRef<Command const>;
 
     //! Runs a command by name; false if there is no such command.
     auto run(std::string_view name) const -> bool;

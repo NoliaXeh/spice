@@ -2,6 +2,7 @@
 #include "spice/core/Utf8.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <format>
 #include <utility>
@@ -11,12 +12,12 @@ namespace {
 using spice::core::Color;
 
 //! The xterm 16-color palette (normal 0-7, bright 8-15).
-constexpr uint8_t base_palette[16][3] {
+constexpr std::array<std::array<uint8_t, 3>, 16> base_palette { {
     { 0x00, 0x00, 0x00 }, { 0xCD, 0x00, 0x00 }, { 0x00, 0xCD, 0x00 }, { 0xCD, 0xCD, 0x00 },
     { 0x00, 0x00, 0xEE }, { 0xCD, 0x00, 0xCD }, { 0x00, 0xCD, 0xCD }, { 0xE5, 0xE5, 0xE5 },
     { 0x7F, 0x7F, 0x7F }, { 0xFF, 0x00, 0x00 }, { 0x00, 0xFF, 0x00 }, { 0xFF, 0xFF, 0x00 },
     { 0x5C, 0x5C, 0xFF }, { 0xFF, 0x00, 0xFF }, { 0x00, 0xFF, 0xFF }, { 0xFF, 0xFF, 0xFF },
-};
+} };
 
 //! The xterm 256-color palette: 16 base + 6x6x6 cube + 24 grays.
 auto indexed_color(int index, spice::core::StyleFlags style) -> Color {
@@ -43,6 +44,12 @@ auto trim_trailing_blanks(std::string text) -> std::string {
         text.pop_back();
     }
     return text;
+}
+
+//! The CSI parameter at `index`, defaulting to 1 (movement counts).
+auto csi_count(std::vector<int> const& params, size_t index = 0) -> uint32_t {
+    return index < params.size() && params[index] > 0
+        ? static_cast<uint32_t>(params[index]) : 1U;
 }
 
 }
@@ -263,10 +270,30 @@ auto Terminal::handle_csi(char final) -> void {
         return;
     }
     auto const params { parameters() };
-    auto const count = [&](size_t index = 0) -> uint32_t {
-        return index < params.size() && params[index] > 0
-            ? static_cast<uint32_t>(params[index]) : 1u;
-    };
+    switch (final) {
+    case 'A': case 'B': case 'C': case 'D':
+    case 'E': case 'F': case 'G': case 'd':
+    case 'H': case 'f':
+        csi_move_cursor(final, params);
+        break;
+
+    case 'J': case 'K': case 'X':
+        csi_erase(final, params);
+        break;
+
+    case 'L': case 'M': case 'P': case '@':
+        csi_edit_cells(final, params);
+        break;
+
+    case 's': _saved_cursor = _cursor; break;
+    case 'u': _cursor = _saved_cursor; break;
+    case 'm': apply_sgr(); break;
+    default: break; // modes, reports, margins: ignored
+    }
+}
+
+auto Terminal::csi_move_cursor(char final, std::vector<int> const& params) -> void {
+    auto const count = [&](size_t index = 0) { return csi_count(params, index); };
     uint32_t const last_line { _height - 1 };
     uint32_t const last_column { _width - 1 };
 
@@ -284,11 +311,16 @@ auto Terminal::handle_csi(char final) -> void {
     case 'H':
     case 'f':
         _cursor.line = std::min(count(0) - 1, last_line);
-        _cursor.column = std::min(params.size() > 1 ? count(1) - 1 : 0u, last_column);
+        _cursor.column = std::min(params.size() > 1 ? count(1) - 1 : 0U, last_column);
         break;
+    default: break;
+    }
+}
 
-    case 'J': { // erase in display
-        int const mode { params[0] };
+auto Terminal::csi_erase(char final, std::vector<int> const& params) -> void {
+    int const mode { params[0] };
+    switch (final) {
+    case 'J': // erase in display
         if (mode == 0) {
             erase_cells(_cursor.line, _cursor.column, _width);
             for (uint32_t line { _cursor.line + 1 }; line < _height; ++line) {
@@ -305,9 +337,8 @@ auto Terminal::handle_csi(char final) -> void {
             }
         }
         break;
-    }
-    case 'K': { // erase in line
-        int const mode { params[0] };
+
+    case 'K': // erase in line
         if (mode == 0) {
             erase_cells(_cursor.line, _cursor.column, _width);
         } else if (mode == 1) {
@@ -316,10 +347,18 @@ auto Terminal::handle_csi(char final) -> void {
             erase_cells(_cursor.line, 0, _width);
         }
         break;
-    }
 
+    case 'X': // erase characters in place
+        erase_cells(_cursor.line, _cursor.column, _cursor.column + csi_count(params));
+        break;
+    default: break;
+    }
+}
+
+auto Terminal::csi_edit_cells(char final, std::vector<int> const& params) -> void {
+    switch (final) {
     case 'L': { // insert blank lines at the cursor
-        uint32_t const n { std::min(count(), _height - _cursor.line) };
+        uint32_t const n { std::min(csi_count(params), _height - _cursor.line) };
         auto const from { _cells.begin() + static_cast<size_t>(_cursor.line) * _width };
         std::move_backward(from, _cells.end() - static_cast<size_t>(n) * _width, _cells.end());
         for (uint32_t line { _cursor.line }; line < _cursor.line + n; ++line) {
@@ -328,7 +367,7 @@ auto Terminal::handle_csi(char final) -> void {
         break;
     }
     case 'M': { // delete lines at the cursor
-        uint32_t const n { std::min(count(), _height - _cursor.line) };
+        uint32_t const n { std::min(csi_count(params), _height - _cursor.line) };
         auto const from { _cells.begin() + static_cast<size_t>(_cursor.line) * _width };
         std::move(from + static_cast<size_t>(n) * _width, _cells.end(), from);
         for (uint32_t line { _height - n }; line < _height; ++line) {
@@ -337,7 +376,7 @@ auto Terminal::handle_csi(char final) -> void {
         break;
     }
     case 'P': { // delete characters (shift the rest of the line left)
-        uint32_t const n { std::min(count(), _width - _cursor.column) };
+        uint32_t const n { std::min(csi_count(params), _width - _cursor.column) };
         for (uint32_t column { _cursor.column }; column < _width; ++column) {
             at(_cursor.line, column) = column + n < _width
                 ? at(_cursor.line, column + n)
@@ -346,21 +385,14 @@ auto Terminal::handle_csi(char final) -> void {
         break;
     }
     case '@': { // insert blank characters
-        uint32_t const n { std::min(count(), _width - _cursor.column) };
+        uint32_t const n { std::min(csi_count(params), _width - _cursor.column) };
         for (uint32_t column { _width }; column-- > _cursor.column + n;) {
             at(_cursor.line, column) = at(_cursor.line, column - n);
         }
         erase_cells(_cursor.line, _cursor.column, _cursor.column + n);
         break;
     }
-    case 'X': // erase characters in place
-        erase_cells(_cursor.line, _cursor.column, _cursor.column + count());
-        break;
-
-    case 's': _saved_cursor = _cursor; break;
-    case 'u': _cursor = _saved_cursor; break;
-    case 'm': apply_sgr(); break;
-    default: break; // modes, reports, margins: ignored
+    default: break;
     }
 }
 

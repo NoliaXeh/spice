@@ -23,16 +23,16 @@ TEST_CASE("core::CommandRegistry rejects duplicate names") {
     CHECK_EQ(registry.find("a")->title, "first");
 }
 
-TEST_CASE("core::CommandRegistry::find() returns nullptr for unknown names") {
+TEST_CASE("core::CommandRegistry::find() returns nothing for unknown names") {
     CommandRegistry registry;
-    CHECK_EQ(registry.find("nope"), nullptr);
+    CHECK_FALSE(registry.find("nope"));
 }
 
 TEST_CASE("core::CommandRegistry::remove() unregisters") {
     CommandRegistry registry;
     registry.add({ "a", "A", [] {} });
     CHECK(registry.remove("a"));
-    CHECK_EQ(registry.find("a"), nullptr);
+    CHECK_FALSE(registry.find("a"));
     CHECK_FALSE(registry.remove("a"));
     CHECK(registry.add({ "a", "again", [] {} })); // name free again
 }

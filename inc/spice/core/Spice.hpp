@@ -4,6 +4,7 @@
 #include "spice/core/Buffer.hpp"
 #include "spice/core/Grid.hpp"
 #include "spice/core/Layout.hpp"
+#include "spice/core/OptRef.hpp"
 #include "spice/core/Pane.hpp"
 #include "spice/core/Pty.hpp"
 #include "spice/core/Rectangle.hpp"
@@ -42,7 +43,7 @@ public:
     //! filling the screen for the first pane). Focuses it; returns its id.
     //! This overload picks the orientation from the tile's shape.
     auto open_pane(PaneType type, std::shared_ptr<Buffer> buffer) -> uint32_t;
-// This ios a comment
+
     //! Same, with an explicit orientation: `horizontal` puts the new pane
     //! to the right of the split tile (vertical divider), otherwise below.
     auto open_pane(PaneType type, std::shared_ptr<Buffer> buffer, bool horizontal) -> uint32_t;
@@ -78,9 +79,9 @@ public:
 
     auto pane_count() const -> size_t;
     auto pane_ids() const -> std::vector<uint32_t>;
-    auto pane(uint32_t id) -> Pane*; //!< nullptr if unknown
+    auto pane(uint32_t id) -> OptRef<Pane>; //!< empty if unknown
     auto focused_id() const -> uint32_t; //!< 0 when no pane is focused
-    auto focused_pane() -> Pane*;
+    auto focused_pane() -> OptRef<Pane>;
     auto focus(uint32_t id) -> void;
     auto move_focus(Direction direction) -> void;
 

@@ -68,6 +68,10 @@ private:
     auto handle_control(char byte) -> void;
     auto handle_escape(char byte) -> void;
     auto handle_csi(char final) -> void;
+    // handle_csi's parts, by sequence family
+    auto csi_move_cursor(char final, std::vector<int> const& params) -> void;
+    auto csi_erase(char final, std::vector<int> const& params) -> void;
+    auto csi_edit_cells(char final, std::vector<int> const& params) -> void;
     auto apply_sgr() -> void;
     auto line_text(uint32_t line) const -> std::string;
     auto parameters() const -> std::vector<int>;

@@ -4,15 +4,19 @@
 //! event loop. Everything reusable lives in core; this file only assembles.
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <format>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <print>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -40,10 +44,6 @@
 #include "spice/plugin/HostServices.hpp"
 #include "spice/plugin/MsgPack.hpp"
 #include "spice/plugin/PluginHost.hpp"
-
-#include <chrono>
-#include <memory>
-#include <thread>
 
 #ifndef SPICE_VERSION
 #define SPICE_VERSION "dev"
@@ -124,7 +124,7 @@ auto parse_options(int argc, char** argv) -> Options {
 //! The built-in key bindings, as data so config keybinds can override any
 //! of them: config-style key name -> command. The Master key (configurable,
 //! ctrl-space by default per CONFIG.md) always opens the palette on top.
-constexpr std::pair<std::string_view, std::string_view> default_bindings[] {
+constexpr auto default_bindings { std::to_array<std::pair<std::string_view, std::string_view>>({
     { "ctrl-p", "palette.open" }, // some terminals swallow ctrl-space
     { "alt-p", "palette.open" },  // ...or reserve both
     { "ctrl-w", "session.close" },
@@ -146,7 +146,7 @@ constexpr std::pair<std::string_view, std::string_view> default_bindings[] {
     { "alt-left", "pane.shrink_horizontal" },
     { "alt-down", "pane.grow_vertical" },
     { "alt-up", "pane.shrink_vertical" },
-};
+}) };
 
 //! An in-progress mouse drag. Grabbed by the border, a pane moves: floats
 //! follow the pointer, docked panes swap with the drop target. Grabbed by
@@ -219,6 +219,10 @@ private:
     // -- startup ----------------------------------------------------
     auto open_startup_panes(std::vector<std::string> const& files) -> void;
     auto register_builtin_commands() -> void;
+    auto register_session_commands() -> void;
+    auto register_pane_commands() -> void;
+    auto register_file_commands() -> void;
+    auto register_edit_commands() -> void;
     auto make_bindings() -> void;
     auto start_plugins() -> void;
 
@@ -272,6 +276,8 @@ private:
     auto on_resize() -> void;
     //! Routes a key to the open palette (modal).
     auto on_palette_key(core::Event const& event) -> void;
+    //! The palette's pick: routed to the picker, the prompt or the registry.
+    auto on_palette_picked() -> void;
     //! A left press: focus, then border drag / cursor + selection arm.
     auto on_click(core::Event const& event) -> void;
     //! Pointer moved or released while dragging.
@@ -403,7 +409,7 @@ auto App::register_commands(
                 { "pane", plugin::msgpack::Value {
                     static_cast<uint64_t>(_session.focused_id()) } },
             };
-            if (auto* pane { _session.focused_pane() }) {
+            if (auto const pane { _session.focused_pane() }) {
                 fields.emplace_back("buffer", plugin::msgpack::Value {
                     buffer_id_for(pane->buffer()) });
             }
@@ -633,24 +639,19 @@ auto App::open_startup_panes(std::vector<std::string> const& files) -> void {
 }
 
 auto App::register_builtin_commands() -> void {
-    // session
+    register_session_commands();
+    register_pane_commands();
+    register_file_commands();
+    register_edit_commands();
+}
+
+auto App::register_session_commands() -> void {
     _registry.add({ "palette.open", "Open the command palette", [this] {
         open_palette();
     } });
     _registry.add({ "session.close", "Close Spice", [this] { _running = false; } });
     _registry.add({ "session.welcome", "Open Welcome Pane", [this] {
         _session.open_welcome_pane();
-    } });
-
-    // buffers and splits
-    _registry.add({ "buffer.new", "New buffer", [this] {
-        _session.open_pane(core::PaneType::edit, make_scratch());
-    } });
-    _registry.add({ "pane.split_vertical", "Split vertical (side by side)", [this] {
-        _session.open_pane(core::PaneType::edit, make_scratch(), true);
-    } });
-    _registry.add({ "pane.split_horizontal", "Split horizontal (stacked)", [this] {
-        _session.open_pane(core::PaneType::edit, make_scratch(), false);
     } });
     _registry.add({ "buffer.list", "List buffers", [this] {
         std::string content { "buffers:" };
@@ -663,8 +664,22 @@ auto App::register_builtin_commands() -> void {
         }
         open_list_float("buffers", content);
     } });
+    _registry.add({ "pty.shell", "Run a shell in a new PTY", [this] {
+        char const* shell { std::getenv("SHELL") };
+        _session.open_pty_pane({ shell != nullptr ? shell : "/bin/sh" });
+    } });
+}
 
-    // panes
+auto App::register_pane_commands() -> void {
+    _registry.add({ "buffer.new", "New buffer", [this] {
+        _session.open_pane(core::PaneType::edit, make_scratch());
+    } });
+    _registry.add({ "pane.split_vertical", "Split vertical (side by side)", [this] {
+        _session.open_pane(core::PaneType::edit, make_scratch(), true);
+    } });
+    _registry.add({ "pane.split_horizontal", "Split horizontal (stacked)", [this] {
+        _session.open_pane(core::PaneType::edit, make_scratch(), false);
+    } });
     _registry.add({ "pane.list", "List panes", [this] {
         std::string content { "panes:" };
         for (uint32_t const id : _session.pane_ids()) {
@@ -707,19 +722,14 @@ auto App::register_builtin_commands() -> void {
     _registry.add({ "pane.shrink_vertical", "Shrink pane vertically", [this] {
         _session.resize_focused(0, -1);
     } });
+}
 
-    // pty
-    _registry.add({ "pty.shell", "Run a shell in a new PTY", [this] {
-        char const* shell { std::getenv("SHELL") };
-        _session.open_pty_pane({ shell != nullptr ? shell : "/bin/sh" });
-    } });
-
-    // files (Open picks its path through the picker, Save-as via a prompt)
+//! Open picks its path through the picker, Save-as via a prompt.
+auto App::register_file_commands() -> void {
     _registry.add({ "file.open", "Open file", [this] { open_file_picker(); } });
     _registry.add({ "file.save", "Save", [this] {
-        auto* pane { _session.focused_pane() };
-        if (pane == nullptr
-            || pane->buffer()->capability() != core::BufferCapability::editable) {
+        auto const pane { _session.focused_pane() };
+        if (!pane || pane->buffer()->capability() != core::BufferCapability::editable) {
             return;
         }
         if (pane->buffer()->path().empty()) { // never saved: ask where
@@ -729,17 +739,17 @@ auto App::register_builtin_commands() -> void {
         }
     } });
     _registry.add({ "file.save_as", "Save as", [this] {
-        auto* pane { _session.focused_pane() };
-        if (pane == nullptr
-            || pane->buffer()->capability() != core::BufferCapability::editable) {
+        auto const pane { _session.focused_pane() };
+        if (!pane || pane->buffer()->capability() != core::BufferCapability::editable) {
             return;
         }
         open_prompt("Save as", [this](std::string const& path) { save_focused_to(path); });
     } });
+}
 
-    // editing
+auto App::register_edit_commands() -> void {
     _registry.add({ "edit.copy", "Copy selection", [this] {
-        if (auto* pane { _session.focused_pane() }) {
+        if (auto const pane { _session.focused_pane() }) {
             if (auto const range { pane->selection() }) {
                 _clipboard = pane->buffer()->text_between(range->first, range->second);
                 push_system_clipboard(_clipboard);
@@ -747,7 +757,7 @@ auto App::register_builtin_commands() -> void {
         }
     } });
     _registry.add({ "edit.cut", "Cut selection", [this] {
-        if (auto* pane { _session.focused_pane() }; pane != nullptr && !pane->read_only()) {
+        if (auto const pane { _session.focused_pane() }; pane && !pane->read_only()) {
             if (auto const range { pane->selection() }) {
                 _clipboard = pane->buffer()->text_between(range->first, range->second);
                 push_system_clipboard(_clipboard);
@@ -759,8 +769,8 @@ auto App::register_builtin_commands() -> void {
         }
     } });
     _registry.add({ "edit.paste", "Paste", [this] {
-        auto* pane { _session.focused_pane() };
-        if (pane == nullptr || pane->read_only() || _clipboard.empty()) {
+        auto const pane { _session.focused_pane() };
+        if (!pane || pane->read_only() || _clipboard.empty()) {
             return;
         }
         if (auto const range { pane->selection() }) { // paste replaces it
@@ -774,14 +784,14 @@ auto App::register_builtin_commands() -> void {
         }
     } });
     _registry.add({ "buffer.undo", "Undo", [this] {
-        if (auto* pane { _session.focused_pane() }; pane != nullptr && !pane->read_only()) {
+        if (auto const pane { _session.focused_pane() }; pane && !pane->read_only()) {
             if (auto const position { pane->buffer()->undo() }) {
                 pane->set_cursor(*position);
             }
         }
     } });
     _registry.add({ "buffer.redo", "Redo", [this] {
-        if (auto* pane { _session.focused_pane() }; pane != nullptr && !pane->read_only()) {
+        if (auto const pane { _session.focused_pane() }; pane && !pane->read_only()) {
             if (auto const position { pane->buffer()->redo() }) {
                 pane->set_cursor(*position);
             }
@@ -865,8 +875,8 @@ auto App::run_command(std::string_view name) -> void {
 
 auto App::run_bound_command(std::string const& name) -> void {
     // in a PTY pane, copy/paste keys keep their terminal meaning
-    if (auto* pane { _session.focused_pane() };
-        pane != nullptr && pane->type() == core::PaneType::pty) {
+    if (auto const pane { _session.focused_pane() };
+        pane && pane->type() == core::PaneType::pty) {
         if (name == "edit.copy") {
             _session.write_to_pty(_session.focused_id(), "\x03");
             return;
@@ -881,7 +891,7 @@ auto App::run_bound_command(std::string const& name) -> void {
 
 auto App::log_note(std::string const& note) -> void {
     _log_buffer->append("\n" + note);
-    if (auto* pane { _session.pane(_log_pane) }) {
+    if (auto const pane { _session.pane(_log_pane) }) {
         if (auto const area { _session.pane_area(_log_pane) }) {
             pane->scroll_to_bottom(*area);
             _damage.push_back(*area);
@@ -969,8 +979,8 @@ auto App::open_file(std::string const& path) -> void {
 }
 
 auto App::save_focused_to(std::string const& path) -> void {
-    auto* pane { _session.focused_pane() };
-    if (pane == nullptr || path.empty()) {
+    auto const pane { _session.focused_pane() };
+    if (!pane || path.empty()) {
         return;
     }
     auto& buffer { *pane->buffer() };
@@ -989,7 +999,7 @@ auto App::push_system_clipboard(std::string const& text) -> void {
 
 auto App::pump_ptys() -> void {
     for (uint32_t const id : _session.pump_ptys()) {
-        if (auto* pane { _session.pane(id) }) {
+        if (auto const pane { _session.pane(id) }) {
             if (auto const area { _session.pane_area(id) }) {
                 pane->scroll_to_bottom(*area);
                 _damage.push_back(*area);
@@ -1015,8 +1025,8 @@ auto App::on_palette_key(core::Event const& event) -> void {
     // modal: the palette takes every key; Master closes it again
     if (id == _master_id) {
         _palette.close();
-        _prompt_action = nullptr;
-        _picker_action = nullptr;
+        _prompt_action = {};
+        _picker_action = {};
         _damage.push_back(core::Palette::area(_screen));
         return;
     }
@@ -1046,43 +1056,47 @@ auto App::on_palette_key(core::Event const& event) -> void {
         _damage.push_back(core::Palette::area(_screen));
         break;
     case core::Palette::Outcome::closed:
-        _prompt_action = nullptr;
-        _picker_action = nullptr;
+        _prompt_action = {};
+        _picker_action = {};
         _damage.push_back(core::Palette::area(_screen));
         break;
     case core::Palette::Outcome::picked:
-        if (_picker_action) { // the file picker gets the picked path...
-            std::string value { _palette.selected_name() };
-            if (value.empty()) {
-                value = _palette.query(); // nothing listed: the text stands
-            }
-            if (!value.empty() && value.back() == '/') {
-                // a directory: descend, keeping the picker open inside it
-                _palette.open_picker("Open file", [this](std::string const& query) {
-                    return file_picker_items(query);
-                });
-                _palette.set_query(value);
-                _damage.push_back(core::Palette::area(_screen));
-                break;
-            }
-            auto const action { std::move(_picker_action) };
-            _picker_action = nullptr;
-            if (!value.empty()) {
-                action(value);
-            }
-            _full_repaint = true;
-        } else if (_prompt_action) { // ...a prompt gets the typed text...
-            auto const action { std::move(_prompt_action) };
-            _prompt_action = nullptr;
-            action(_palette.query());
-            _full_repaint = true;
-        } else { // ...and the command palette runs the pick
-            _registry.run(_palette.selected_name());
-            _full_repaint = true;
-        }
+        on_palette_picked();
         break;
     case core::Palette::Outcome::ignored:
         break;
+    }
+}
+
+auto App::on_palette_picked() -> void {
+    if (_picker_action) { // the file picker gets the picked path...
+        std::string value { _palette.selected_name() };
+        if (value.empty()) {
+            value = _palette.query(); // nothing listed: the text stands
+        }
+        if (!value.empty() && value.back() == '/') {
+            // a directory: descend, keeping the picker open inside it
+            _palette.open_picker("Open file", [this](std::string const& query) {
+                return file_picker_items(query);
+            });
+            _palette.set_query(value);
+            _damage.push_back(core::Palette::area(_screen));
+            return;
+        }
+        auto const action { std::move(_picker_action) };
+        _picker_action = {};
+        if (!value.empty()) {
+            action(value);
+        }
+        _full_repaint = true;
+    } else if (_prompt_action) { // ...a prompt gets the typed text...
+        auto const action { std::move(_prompt_action) };
+        _prompt_action = {};
+        action(_palette.query());
+        _full_repaint = true;
+    } else { // ...and the command palette runs the pick
+        _registry.run(_palette.selected_name());
+        _full_repaint = true;
     }
 }
 
@@ -1094,7 +1108,7 @@ auto App::on_click(core::Event const& event) -> void {
     }
     mark_focused(); // old focus border
     _session.focus(*id);
-    if (auto* pane { _session.pane(*id) }) {
+    if (auto const pane { _session.pane(*id) }) {
         if (auto const area { _session.pane_area(*id) }) {
             if (core::Pane::close_button(*area).contains(point)) {
                 // the x button closes the pane
@@ -1151,7 +1165,7 @@ auto App::on_drag(core::MouseEvent const& mouse) -> void {
             }
         } else if (_drag.kind == Drag::Kind::text) {
             // extend the selection to the cell under the pointer
-            if (auto* pane { _session.pane(_drag.pane) }) {
+            if (auto const pane { _session.pane(_drag.pane) }) {
                 if (auto const area { _session.pane_area(_drag.pane) }) {
                     pane->set_cursor(pane->position_from_screen(*area, mouse.position));
                     _damage.push_back(*area);
@@ -1210,8 +1224,8 @@ auto App::open_palette() -> void {
 }
 
 auto App::on_unbound_key(core::KeyEvent const& key) -> void {
-    auto* pane { _session.focused_pane() };
-    if (pane == nullptr) {
+    auto const pane { _session.focused_pane() };
+    if (!pane) {
         return;
     }
     if (pane->type() == core::PaneType::pty) {
@@ -1307,7 +1321,7 @@ auto App::repaint(std::vector<Rectangle> const& rects) -> void {
     Position park { 0, 0, 0 };
     if (_palette.is_open()) {
         park = _palette.cursor_screen_position(_screen);
-    } else if (auto* focused { _session.focused_pane() }) {
+    } else if (auto const focused { _session.focused_pane() }) {
         if (auto const area { _session.pane_area(_session.focused_id()) }) {
             park = focused->cursor_screen_position(*area);
         }

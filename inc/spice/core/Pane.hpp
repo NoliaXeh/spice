@@ -3,6 +3,7 @@
 
 #include "spice/core/Buffer.hpp"
 #include "spice/core/Grid.hpp"
+#include "spice/core/OptRef.hpp"
 #include "spice/core/Position.hpp"
 #include "spice/core/Rectangle.hpp"
 #include "spice/core/Theme.hpp"
@@ -46,8 +47,9 @@ public:
 
     //! A PTY pane shows a live emulated screen instead of its scrollback
     //! buffer while this is set (the session owns the Terminal and clears
-    //! it when the child exits); the cursor comes from the emulator too.
-    auto set_terminal(Terminal const* terminal) -> void;
+    //! it - pass `{}` - when the child exits); the cursor comes from the
+    //! emulator too.
+    auto set_terminal(OptRef<Terminal const> terminal) -> void;
 
     //! Selection: the range between an anchor and the cursor. Set the
     //! anchor where selecting starts (shift-move, mouse press); it stays
@@ -93,9 +95,21 @@ private:
     auto clamp(Position position) const -> Position;
     auto scroll_to_cursor(Rectangle content) -> void;
 
+    // draw()'s parts, in paint order
+    auto draw_title_bar(Grid& grid, Rectangle area, bool focused, Theme const& theme)
+        -> void;
+    auto draw_border(Grid& grid, Rectangle area, bool focused, Theme const& theme) -> void;
+    //! The live emulator screen of a PTY pane.
+    auto draw_terminal_content(Grid& grid, Rectangle content, Theme const& theme) -> void;
+    //! The buffer's text, with selection and cursor-line highlights.
+    auto draw_buffer_content(Grid& grid, Rectangle content, bool focused, Theme const& theme)
+        -> void;
+    //! A thumb on the right border once content overflows the view.
+    auto draw_scrollbar(Grid& grid, Rectangle area, bool focused, Theme const& theme) -> void;
+
     PaneType _type;
     std::shared_ptr<Buffer> _buffer;
-    Terminal const* _terminal { nullptr };
+    OptRef<Terminal const> _terminal;
     bool _read_only { false };
     Position _cursor { 0, 0, 0 };
     Position _scroll { 0, 0, 0 };

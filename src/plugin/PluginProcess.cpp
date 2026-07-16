@@ -203,12 +203,15 @@ auto PluginProcess::terminate() -> void {
         waitpid(_pid, nullptr, 0);
         _pid = -1;
     }
-    for (int* fd : { &_stdin, &_stdout, &_stderr }) {
-        if (*fd >= 0) {
-            close(*fd);
-            *fd = -1;
+    auto const close_fd = [](int& fd) {
+        if (fd >= 0) {
+            close(fd);
+            fd = -1;
         }
-    }
+    };
+    close_fd(_stdin);
+    close_fd(_stdout);
+    close_fd(_stderr);
     _running = false;
     _incoming.clear();
     _outgoing.clear();

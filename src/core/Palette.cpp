@@ -70,7 +70,7 @@ auto Palette::open(std::vector<Item> items) -> void {
     std::ranges::sort(_items, {}, &Item::title);
     _title = commands_title;
     _input = false;
-    _source = nullptr;
+    _source = {};
     _query.clear();
     _selected = 0;
     _scroll = 0;
@@ -82,7 +82,7 @@ auto Palette::open_input(std::string title) -> void {
     _items.clear();
     _title = std::move(title);
     _input = true;
-    _source = nullptr;
+    _source = {};
     _query.clear();
     _selected = 0;
     _scroll = 0;
@@ -109,7 +109,7 @@ auto Palette::is_input() const -> bool {
 }
 
 auto Palette::is_picker() const -> bool {
-    return _source != nullptr;
+    return static_cast<bool>(_source);
 }
 
 auto Palette::set_query(std::string query) -> void {
@@ -235,12 +235,22 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
         return;
     }
 
+    draw_frame(grid, rect, theme);
+
+    // query line: "> filter"
+    paint_row(
+        grid, { rect.position.line + 1, rect.position.column + 1, 0 }, rect.width - 2,
+        std::string(prompt) + _query,
+        theme.color(Theme::Usage::text), theme.color(Theme::Usage::background)
+    );
+    draw_list(grid, rect, theme);
+
+    drop_shadow(grid, rect); // lift the palette off the panes beneath
+}
+
+auto Palette::draw_frame(Grid& grid, Rectangle rect, Theme const& theme) -> void {
     Color const border { theme.color(Theme::Usage::border_focused) };
-    Color const text { theme.color(Theme::Usage::text) };
     Color const background { theme.color(Theme::Usage::background) };
-    Color const info { theme.color(Theme::Usage::info) };
-    Color const selection_text { theme.color(Theme::Usage::selection_text) };
-    Color const selection_background { theme.color(Theme::Usage::selection_background) };
 
     uint32_t const top { rect.position.line };
     uint32_t const bottom { rect.position.line + rect.height - 1 };
@@ -265,15 +275,19 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
     paint_cell(grid, { top, right, 0 }, "╮", border, background);
     paint_cell(grid, { bottom, left, 0 }, "╰", border, background);
     paint_cell(grid, { bottom, right, 0 }, "╯", border, background);
+}
 
+auto Palette::draw_list(Grid& grid, Rectangle rect, Theme const& theme) -> void {
+    Color const text { theme.color(Theme::Usage::text) };
+    Color const background { theme.color(Theme::Usage::background) };
+    Color const info { theme.color(Theme::Usage::info) };
+    Color const selection_text { theme.color(Theme::Usage::selection_text) };
+    Color const selection_background { theme.color(Theme::Usage::selection_background) };
+
+    uint32_t const top { rect.position.line };
+    uint32_t const left { rect.position.column };
     uint32_t const content_width { rect.width - 2 };
     uint32_t const list_rows { rect.height - 3 }; // minus border and query line
-
-    // query line: "> filter"
-    paint_row(
-        grid, { top + 1, left + 1, 0 }, content_width,
-        std::string(prompt) + _query, text, background
-    );
 
     // keep the selection visible
     if (_selected < _scroll) {
@@ -317,8 +331,6 @@ auto Palette::draw(Grid& grid, Rectangle screen, Theme const& theme) -> void {
             paint_row(grid, origin, content_width, "", text, background);
         }
     }
-
-    drop_shadow(grid, rect); // lift the palette off the panes beneath
 }
 
 auto Palette::cursor_screen_position(Rectangle screen) const -> Position {

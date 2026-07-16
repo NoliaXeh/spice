@@ -127,7 +127,7 @@ auto Spice::open_pty_pane(std::vector<std::string> const& argv) -> uint32_t {
         return 0;
     }
     auto const [slot, inserted] { _ptys.emplace(id, std::move(entry)) };
-    pane(id)->set_terminal(&slot->second.terminal);
+    pane(id)->set_terminal(slot->second.terminal);
     return id;
 }
 
@@ -135,9 +135,9 @@ auto Spice::pump_ptys() -> std::vector<uint32_t> {
     std::vector<uint32_t> changed;
     std::vector<uint32_t> dead;
     for (auto& [id, entry] : _ptys) {
-        auto* p { pane(id) };
+        auto p { pane(id) };
         std::string const raw { entry.pty.read_output() };
-        if (!raw.empty() && p != nullptr) {
+        if (!raw.empty() && p) {
             entry.terminal.feed(raw);
             if (auto const answers { entry.terminal.take_responses() }; !answers.empty()) {
                 entry.pty.write_input(answers); // the child asked; reply
@@ -148,13 +148,13 @@ auto Spice::pump_ptys() -> std::vector<uint32_t> {
             changed.push_back(id);
         }
         if (!entry.pty.running()) {
-            if (p != nullptr) {
+            if (p) {
                 // the live screen goes away: preserve it in the scrollback
                 for (auto const& line : entry.terminal.screen_text()) {
                     p->buffer()->append("\n" + line);
                 }
                 p->buffer()->append("\n[exited]");
-                p->set_terminal(nullptr);
+                p->set_terminal({});
                 if (std::ranges::find(changed, id) == changed.end()) {
                     changed.push_back(id);
                 }
@@ -189,8 +189,8 @@ auto Spice::close_focused_pane() -> void {
     if (_focused == 0) {
         return;
     }
-    if (auto* p { pane(_focused) }) {
-        p->set_terminal(nullptr); // the entry (and its screen) goes away
+    if (auto p { pane(_focused) }) {
+        p->set_terminal({}); // the entry (and its screen) goes away
     }
     _ptys.erase(_focused); // kills the child; the scrollback buffer stays
     _layout.remove(_focused);
@@ -218,16 +218,19 @@ auto Spice::pane_ids() const -> std::vector<uint32_t> {
     return ids;
 }
 
-auto Spice::pane(uint32_t id) -> Pane* {
+auto Spice::pane(uint32_t id) -> OptRef<Pane> {
     auto const found { _panes.find(id) };
-    return found != _panes.end() ? &found->second : nullptr;
+    if (found == _panes.end()) {
+        return {};
+    }
+    return found->second;
 }
 
 auto Spice::focused_id() const -> uint32_t {
     return _focused;
 }
 
-auto Spice::focused_pane() -> Pane* {
+auto Spice::focused_pane() -> OptRef<Pane> {
     return pane(_focused);
 }
 
@@ -318,12 +321,12 @@ auto Spice::pane_area(uint32_t id) const -> std::optional<Rectangle> {
 
 auto Spice::draw(Grid& grid, Theme const& theme) -> void {
     for (auto const& [id, rect] : _layout.tiles(_screen)) {
-        if (auto* p { pane(id) }) {
+        if (auto p { pane(id) }) {
             p->draw(grid, rect, id == _focused, theme);
         }
     }
     for (auto const& [id, rect] : _layout.floats()) { // bottom to top
-        if (auto* p { pane(id) }) {
+        if (auto p { pane(id) }) {
             p->draw(grid, rect, id == _focused, theme);
             drop_shadow(grid, rect); // lift the float off what is beneath
         }

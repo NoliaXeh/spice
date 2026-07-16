@@ -81,6 +81,12 @@ public:
 private:
     auto refilter() -> void;
 
+    // draw()'s parts
+    //! The border with the title woven into its top edge.
+    auto draw_frame(Grid& grid, Rectangle rect, Theme const& theme) -> void;
+    //! The filtered items, selection highlighted, hints right-aligned.
+    auto draw_list(Grid& grid, Rectangle rect, Theme const& theme) -> void;
+
     bool _open { false };
     bool _input { false };
     std::function<std::vector<Item>(std::string const&)> _source; //!< picker mode when set

@@ -1,4 +1,5 @@
 #include "spice/core/Layout.hpp"
+#include "spice/core/OptRef.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -22,7 +23,15 @@ namespace {
 //! Panes never shrink below this many cells on either axis.
 constexpr uint32_t min_pane_cells { 3 };
 
-auto has_leaf(Layout::Node const* node, uint32_t pane) -> bool;
+//! A child as a nullable reference (unique_ptr's null carried across).
+auto as_ref(std::unique_ptr<Layout::Node> const& node) -> OptRef<Layout::Node const> {
+    if (node == nullptr) {
+        return {};
+    }
+    return *node;
+}
+
+auto has_leaf(OptRef<Layout::Node const> node, uint32_t pane) -> bool;
 
 //! The first child's share of `total` cells, clamped so both sides keep at
 //! least the minimum (when there is room for it).
@@ -70,10 +79,10 @@ auto Layout::operator=(Layout&&) -> Layout& = default;
 namespace {
 
 auto collect_tiles(
-    Layout::Node const* node, Rectangle rect,
+    OptRef<Layout::Node const> node, Rectangle rect,
     std::vector<std::pair<uint32_t, Rectangle>>& out
 ) -> void {
-    if (node == nullptr) {
+    if (!node) {
         return;
     }
     if (node->is_leaf()) {
@@ -81,8 +90,8 @@ auto collect_tiles(
         return;
     }
     auto const [first, second] { split_rect(rect, node->horizontal, node->ratio) };
-    collect_tiles(node->first.get(), first, out);
-    collect_tiles(node->second.get(), second, out);
+    collect_tiles(as_ref(node->first), first, out);
+    collect_tiles(as_ref(node->second), second, out);
 }
 
 //! Adjusts the deepest split of `orientation` above `pane` so the pane's
@@ -103,8 +112,8 @@ auto resize_in_tree(
     if (node->horizontal != horizontal) {
         return false;
     }
-    bool const in_first { has_leaf(node->first.get(), pane) };
-    if (!in_first && !has_leaf(node->second.get(), pane)) {
+    bool const in_first { has_leaf(as_ref(node->first), pane) };
+    if (!in_first && !has_leaf(as_ref(node->second), pane)) {
         return false;
     }
 
@@ -122,29 +131,32 @@ auto resize_in_tree(
     return true;
 }
 
-//! The leaf node holding `pane`, or nullptr.
+//! The owning slot of the leaf holding `pane`, or empty.
 auto find_leaf(std::unique_ptr<Layout::Node>& node, uint32_t pane)
-    -> std::unique_ptr<Layout::Node>* {
+    -> OptRef<std::unique_ptr<Layout::Node>> {
     if (node == nullptr) {
-        return nullptr;
+        return {};
     }
     if (node->is_leaf()) {
-        return node->pane == pane ? &node : nullptr;
+        if (node->pane == pane) {
+            return node;
+        }
+        return {};
     }
-    if (auto* found { find_leaf(node->first, pane) }) {
+    if (auto found { find_leaf(node->first, pane) }) {
         return found;
     }
     return find_leaf(node->second, pane);
 }
 
-auto has_leaf(Layout::Node const* node, uint32_t pane) -> bool {
-    if (node == nullptr) {
+auto has_leaf(OptRef<Layout::Node const> node, uint32_t pane) -> bool {
+    if (!node) {
         return false;
     }
     if (node->is_leaf()) {
         return node->pane == pane;
     }
-    return has_leaf(node->first.get(), pane) || has_leaf(node->second.get(), pane);
+    return has_leaf(as_ref(node->first), pane) || has_leaf(as_ref(node->second), pane);
 }
 
 }
@@ -154,7 +166,7 @@ auto Layout::empty() const -> bool {
 }
 
 auto Layout::contains(uint32_t pane) const -> bool {
-    return is_floating(pane) || has_leaf(_root.get(), pane);
+    return is_floating(pane) || has_leaf(as_ref(_root), pane);
 }
 
 auto Layout::is_floating(uint32_t pane) const -> bool {
@@ -173,8 +185,8 @@ auto Layout::insert(uint32_t pane, uint32_t at, bool horizontal) -> bool {
         return true;
     }
 
-    auto* target { find_leaf(_root, at) };
-    if (target == nullptr) {
+    auto const target { find_leaf(_root, at) };
+    if (!target) {
         return false;
     }
     auto split { std::make_unique<Node>() };
@@ -194,39 +206,39 @@ auto Layout::remove(uint32_t pane) -> bool {
         return true;
     }
 
-    auto* leaf { find_leaf(_root, pane) };
-    if (leaf == nullptr) {
+    auto const leaf { find_leaf(_root, pane) };
+    if (!leaf) {
         return false;
     }
-    if (leaf == &_root) {
+    if (leaf == OptRef { _root }) {
         _root.reset();
         return true;
     }
 
     // graft the sibling onto the parent split's place. find_leaf gave us the
-    // owning pointer, which lives inside the parent node; walk again to find
+    // owning slot, which lives inside the parent node; walk again to find
     // that parent so we can replace it wholesale.
     struct Walker {
-        static auto parent_of(std::unique_ptr<Node>& node, Node const* child)
-            -> std::unique_ptr<Node>* {
+        static auto parent_of(std::unique_ptr<Node>& node, Node const& child)
+            -> OptRef<std::unique_ptr<Node>> {
             if (node == nullptr || node->is_leaf()) {
-                return nullptr;
+                return {};
             }
-            if (node->first.get() == child || node->second.get() == child) {
-                return &node;
+            if (node->first.get() == &child || node->second.get() == &child) {
+                return node;
             }
-            if (auto* found { parent_of(node->first, child) }) {
+            if (auto found { parent_of(node->first, child) }) {
                 return found;
             }
             return parent_of(node->second, child);
         }
     };
-    auto* parent { Walker::parent_of(_root, leaf->get()) };
-    if (parent == nullptr) {
+    auto const parent { Walker::parent_of(_root, **leaf) };
+    if (!parent) {
         return false;
     }
     auto sibling {
-        (*parent)->first.get() == leaf->get()
+        (*parent)->first == *leaf
             ? std::move((*parent)->second)
             : std::move((*parent)->first)
     };
@@ -303,21 +315,21 @@ auto Layout::resize_pane(
 }
 
 auto Layout::swap(uint32_t a, uint32_t b) -> bool {
-    auto const slot_of = [this](uint32_t pane) -> uint32_t* {
+    auto const slot_of = [this](uint32_t pane) -> OptRef<uint32_t> {
         for (Float& f : _floats) {
             if (f.pane == pane) {
-                return &f.pane;
+                return f.pane;
             }
         }
-        if (auto* leaf { find_leaf(_root, pane) }) {
-            return &(*leaf)->pane;
+        if (auto const leaf { find_leaf(_root, pane) }) {
+            return (*leaf)->pane;
         }
-        return nullptr;
+        return {};
     };
 
-    uint32_t* slot_a { slot_of(a) };
-    uint32_t* slot_b { slot_of(b) };
-    if (a == b || slot_a == nullptr || slot_b == nullptr) {
+    auto const slot_a { slot_of(a) };
+    auto const slot_b { slot_of(b) };
+    if (a == b || !slot_a || !slot_b) {
         return false;
     }
     std::swap(*slot_a, *slot_b);
@@ -326,7 +338,7 @@ auto Layout::swap(uint32_t a, uint32_t b) -> bool {
 
 auto Layout::tiles(Rectangle screen) const -> std::vector<std::pair<uint32_t, Rectangle>> {
     std::vector<std::pair<uint32_t, Rectangle>> out;
-    collect_tiles(_root.get(), screen, out);
+    collect_tiles(as_ref(_root), screen, out);
     return out;
 }
 

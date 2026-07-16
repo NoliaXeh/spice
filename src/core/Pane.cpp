@@ -61,7 +61,7 @@ auto Pane::set_read_only(bool read_only) -> void {
     _read_only = read_only;
 }
 
-auto Pane::set_terminal(Terminal const* terminal) -> void {
+auto Pane::set_terminal(OptRef<Terminal const> terminal) -> void {
     _terminal = terminal;
 }
 
@@ -172,11 +172,30 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     // sharing it): pull the cursor back inside before using it to scroll
     _cursor = clamp(_cursor);
 
-    Color const border {
-        theme.color(focused ? Theme::Usage::border_focused : Theme::Usage::border)
-    };
-    Color const text { theme.color(Theme::Usage::text) };
-    Color const background { theme.color(Theme::Usage::background) };
+    draw_title_bar(grid, area, focused, theme);
+    draw_border(grid, area, focused, theme);
+
+    // content; edit panes scroll to keep the cursor in view, other pane
+    // types keep the scroll they were given (scrollback, plugin-driven)
+    auto const content { content_area(area) };
+    if (_type == PaneType::edit) {
+        scroll_to_cursor(content);
+    }
+
+    if (_terminal) { // a live terminal paints its own screen
+        draw_terminal_content(grid, content, theme);
+        return;
+    }
+    draw_buffer_content(grid, content, focused, theme);
+    draw_scrollbar(grid, area, focused, theme);
+}
+
+//! The title bar: dark on light across the whole top row - a pane-type
+//! dot, the buffer's name (bold when focused, with * for unsaved edits
+//! and [ro] for read-only), and the " F " (float) and " x " (close)
+//! buttons on the right, in red.
+auto Pane::draw_title_bar(Grid& grid, Rectangle area, bool focused, Theme const& theme)
+    -> void {
     Color const bar_text { theme.color(Theme::Usage::titlebar_text) };
     Color const bar_background { theme.color(
         focused ? Theme::Usage::titlebar_background_focused : Theme::Usage::titlebar_background
@@ -185,14 +204,9 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     Color const button_background { theme.color(Theme::Usage::titlebar_button_background) };
 
     uint32_t const top { area.position.line };
-    uint32_t const bottom { area.position.line + area.height - 1 };
     uint32_t const left { area.position.column };
     uint32_t const right { area.position.column + area.width - 1 };
 
-    // the title bar: dark on light across the whole top row - a pane-type
-    // dot, the buffer's name (bold when focused, with * for unsaved edits
-    // and [ro] for read-only), and the " F " (float) and " x " (close)
-    // buttons on the right, in red
     std::string title { _buffer->name() };
     if (_buffer->capability() == BufferCapability::editable && _buffer->dirty()) {
         title += " *";
@@ -233,8 +247,20 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
             paint_cell(grid, cell, " ", bar_text, bar_background);
         }
     }
+}
 
-    // side borders and the rounded bottom
+//! Side borders and the rounded bottom.
+auto Pane::draw_border(Grid& grid, Rectangle area, bool focused, Theme const& theme) -> void {
+    Color const border {
+        theme.color(focused ? Theme::Usage::border_focused : Theme::Usage::border)
+    };
+    Color const background { theme.color(Theme::Usage::background) };
+
+    uint32_t const top { area.position.line };
+    uint32_t const bottom { area.position.line + area.height - 1 };
+    uint32_t const left { area.position.column };
+    uint32_t const right { area.position.column + area.width - 1 };
+
     for (uint32_t line { top + 1 }; line < bottom; ++line) {
         paint_cell(grid, { line, left, 0 }, edge_v, border, background);
         paint_cell(grid, { line, right, 0 }, edge_v, border, background);
@@ -244,37 +270,38 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     }
     paint_cell(grid, { bottom, left, 0 }, corner_bl, border, background);
     paint_cell(grid, { bottom, right, 0 }, corner_br, border, background);
+}
 
-    // content; edit panes scroll to keep the cursor in view, other pane
-    // types keep the scroll they were given (scrollback, plugin-driven)
-    auto const content { content_area(area) };
-    if (_type == PaneType::edit) {
-        scroll_to_cursor(content);
-    }
+auto Pane::draw_terminal_content(Grid& grid, Rectangle content, Theme const& theme) -> void {
+    Color const text { theme.color(Theme::Usage::text) };
+    Color const background { theme.color(Theme::Usage::background) };
 
-    if (_terminal != nullptr) { // a live terminal paints its own screen
-        for (uint32_t row { 0 }; row < content.height; ++row) {
-            for (uint32_t column { 0 }; column < content.width; ++column) {
-                auto const& terminal_cell { _terminal->cell(row, column) };
-                bool const in_screen {
-                    row < _terminal->height() && column < _terminal->width()
-                };
-                paint_cell(
-                    grid,
-                    { content.position.line + row, content.position.column + column, 0 },
-                    in_screen ? std::string_view(terminal_cell.glyph) : " ",
-                    in_screen ? terminal_cell.foreground : text,
-                    in_screen ? terminal_cell.background : background
-                );
-            }
+    for (uint32_t row { 0 }; row < content.height; ++row) {
+        for (uint32_t column { 0 }; column < content.width; ++column) {
+            auto const& terminal_cell { _terminal->cell(row, column) };
+            bool const in_screen {
+                row < _terminal->height() && column < _terminal->width()
+            };
+            paint_cell(
+                grid,
+                { content.position.line + row, content.position.column + column, 0 },
+                in_screen ? std::string_view(terminal_cell.glyph) : " ",
+                in_screen ? terminal_cell.foreground : text,
+                in_screen ? terminal_cell.background : background
+            );
         }
-        return;
     }
+}
 
-    auto const selected_range { selection() };
+auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Theme const& theme)
+    -> void {
+    Color const text { theme.color(Theme::Usage::text) };
+    Color const background { theme.color(Theme::Usage::background) };
     Color const selection_text { theme.color(Theme::Usage::selection_text) };
     Color const selection_background { theme.color(Theme::Usage::selection_background) };
     Color const cursor_line { theme.color(Theme::Usage::cursor_line) };
+
+    auto const selected_range { selection() };
     auto const is_selected = [&](Position in_buffer) -> bool {
         return selected_range
             && !document_order(in_buffer, selected_range->first)
@@ -312,19 +339,30 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
             }
         }
     }
+}
 
-    // a scrollbar thumb on the right border once content overflows the view
+auto Pane::draw_scrollbar(Grid& grid, Rectangle area, bool focused, Theme const& theme)
+    -> void {
+    auto const content { content_area(area) };
     uint32_t const lines { _buffer->line_count() };
-    if (content.height > 0 && lines > content.height) {
-        uint32_t const track { content.height };
-        uint32_t const thumb { std::max(1u, track * content.height / lines) };
-        uint32_t const max_scroll { lines - content.height };
-        uint32_t const offset {
-            max_scroll > 0 ? _scroll.line * (track - thumb) / max_scroll : 0
-        };
-        for (uint32_t i { 0 }; i < thumb; ++i) {
-            paint_cell(grid, { top + 1 + offset + i, right, 0 }, "█", border, background);
-        }
+    if (content.height == 0 || lines <= content.height) {
+        return;
+    }
+    Color const border {
+        theme.color(focused ? Theme::Usage::border_focused : Theme::Usage::border)
+    };
+    Color const background { theme.color(Theme::Usage::background) };
+
+    uint32_t const track { content.height };
+    uint32_t const thumb { std::max(1u, track * content.height / lines) };
+    uint32_t const max_scroll { lines - content.height };
+    uint32_t const offset {
+        max_scroll > 0 ? _scroll.line * (track - thumb) / max_scroll : 0
+    };
+    uint32_t const top { area.position.line };
+    uint32_t const right { area.position.column + area.width - 1 };
+    for (uint32_t i { 0 }; i < thumb; ++i) {
+        paint_cell(grid, { top + 1 + offset + i, right, 0 }, "█", border, background);
     }
 }
 
@@ -341,7 +379,7 @@ auto Pane::position_from_screen(Rectangle area, Position screen) const -> Positi
 
 auto Pane::cursor_screen_position(Rectangle area) const -> Position {
     auto const content { content_area(area) };
-    if (_terminal != nullptr && content.width > 0 && content.height > 0) {
+    if (_terminal && content.width > 0 && content.height > 0) {
         // the emulator knows where its cursor is
         Position const cursor { _terminal->cursor() };
         return {
