@@ -144,13 +144,17 @@ TEST_CASE("core::Spice highlights color a buffer's text where shown") {
     session.draw(screen, theme);
 
     auto const content { core::Pane::content_area(*session.pane_area(id)) };
-    core::Color const pink { screen.style_at(content.position) };
+    // the text sits right of the two-column line-number gutter
+    core::Position const first_cell {
+        content.position.line, content.position.column + 2, 0
+    };
+    core::Color const pink { screen.style_at(first_cell) };
     CHECK_EQ(pink.r, 0xFF);
     CHECK_EQ(pink.g, 0x69);
     CHECK_EQ(pink.b, 0xB4);
     // one past the span: back to the theme's text color
     core::Color const plain {
-        screen.style_at({ content.position.line, content.position.column + 3, 0 })
+        screen.style_at({ first_cell.line, first_cell.column + 3, 0 })
     };
     CHECK_NE(plain.g, 0x69);
 }

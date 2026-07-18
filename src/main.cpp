@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -1347,6 +1348,32 @@ auto App::register_edit_commands() -> void {
                 pane->set_cursor(*position);
             }
         }
+    } });
+    _registry.add({ "edit.select_all", "Select all", [this] {
+        if (auto const pane { _session.focused_pane() }) {
+            auto const& buffer { *pane->buffer() };
+            pane->set_cursor({ 0, 0, 0 });
+            pane->set_anchor({ 0, 0, 0 });
+            pane->set_cursor({
+                buffer.line_count() - 1,
+                buffer.line_length(buffer.line_count() - 1),
+                0,
+            });
+        }
+    } });
+    _registry.add({ "edit.goto_line", "Go to line", [this] {
+        open_prompt("Go to line", [this](std::string const& input) {
+            uint32_t line { 0 };
+            auto const end { input.data() + input.size() };
+            if (std::from_chars(input.data(), end, line).ec != std::errc {}
+                || line == 0) {
+                return; // not a line number: nothing to do
+            }
+            if (auto const pane { _session.focused_pane() }) {
+                pane->clear_anchor();
+                pane->set_cursor({ line - 1, 0, 0 }); // clamps into the buffer
+            }
+        });
     } });
 }
 

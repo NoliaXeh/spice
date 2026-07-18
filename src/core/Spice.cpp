@@ -14,6 +14,7 @@ constexpr std::string_view welcome_text {
     "  drag a pane border  move it (drop on a tile to swap)\n"
     "\n"
     "  shift-arrows / mouse drag  select\n"
+    "  tab / shift-tab  indent / dedent (the selection too)\n"
     "  ctrl-c / ctrl-v  copy / paste\n"
     "  ctrl-o / ctrl-s  open / save a file\n"
     "  ctrl-z / ctrl-y  undo / redo\n"

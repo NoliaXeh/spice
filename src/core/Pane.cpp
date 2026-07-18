@@ -22,6 +22,9 @@ constexpr std::string_view edge_v { "│" };
 //! show a bare bar instead.
 constexpr uint32_t min_width_for_buttons { 12 };
 
+//! Text keeps at least this many columns before a gutter is worth having.
+constexpr uint32_t min_text_columns { 8 };
+
 auto paint_cell(
     Grid& grid, Position cell, std::string_view glyph, Color style, Color background
 ) -> void {
@@ -171,6 +174,21 @@ auto Pane::clamp(Position position) const -> Position {
     return { line, column, 0 };
 }
 
+auto Pane::gutter_width(Rectangle content) const -> uint32_t {
+    if (_type != PaneType::edit) {
+        return 0;
+    }
+    uint32_t digits { 1 };
+    for (uint32_t lines { _buffer->line_count() }; lines >= 10; lines /= 10) {
+        ++digits;
+    }
+    uint32_t const width { digits + 1 }; // the numbers and a breathing space
+    if (content.width < width + min_text_columns) {
+        return 0; // a tiny pane keeps every column for its text
+    }
+    return width;
+}
+
 auto Pane::scroll_to_cursor(Rectangle content) -> void {
     if (content.width == 0 || content.height == 0) {
         return;
@@ -202,7 +220,11 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     // types keep the scroll they were given (scrollback, plugin-driven)
     auto const content { content_area(area) };
     if (_type == PaneType::edit) {
-        scroll_to_cursor(content);
+        Rectangle text_area { content }; // what remains beside the gutter
+        uint32_t const gutter { gutter_width(content) };
+        text_area.position.column += gutter;
+        text_area.width -= gutter;
+        scroll_to_cursor(text_area);
     }
 
     if (_terminal) { // a live terminal paints its own screen
@@ -272,6 +294,42 @@ auto Pane::draw_title_bar(Grid& grid, Rectangle area, bool focused, Theme const&
             );
         } else {
             paint_cell(grid, cell, " ", bar_text, bar_background);
+        }
+    }
+    draw_cursor_indicator(grid, area, focused, theme);
+}
+
+//! line:column, right-aligned on the bar, left of the buttons - skipped
+//! when the title already needs that room.
+auto Pane::draw_cursor_indicator(Grid& grid, Rectangle area, bool focused, Theme const& theme)
+    -> void {
+    if (_type != PaneType::edit) {
+        return;
+    }
+    std::string const text {
+        std::to_string(_cursor.line + 1) + ":" + std::to_string(_cursor.column + 1)
+    };
+    Rectangle const float_at { float_button(area) };
+    uint32_t const end { // the first column the indicator must not touch
+        float_at.width > 0 ? float_at.position.column
+                           : area.position.column + area.width - 1
+    };
+    uint32_t const title_end { // where the title's text stops
+        area.position.column + 3 + static_cast<uint32_t>(_buffer->name().size()) + 6
+    };
+    if (end < area.position.column + area.width
+        && end >= title_end + text.size() + 2) {
+        uint32_t const start { end - static_cast<uint32_t>(text.size()) - 1 };
+        Color const bar_text { theme.color(Theme::Usage::titlebar_text) };
+        Color const bar_background { theme.color(
+            focused ? Theme::Usage::titlebar_background_focused
+                    : Theme::Usage::titlebar_background
+        ) };
+        for (uint32_t i { 0 }; i < text.size(); ++i) {
+            paint_cell(
+                grid, { area.position.line, start + i, 0 },
+                std::string_view(text).substr(i, 1), bar_text, bar_background
+            );
         }
     }
 }
@@ -349,6 +407,10 @@ auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Them
     Color const selection_text { theme.color(Theme::Usage::selection_text) };
     Color const selection_background { theme.color(Theme::Usage::selection_background) };
     Color const cursor_line { theme.color(Theme::Usage::cursor_line) };
+    Color const gutter_text { theme.color(Theme::Usage::border) };
+
+    uint32_t const gutter { gutter_width(content) };
+    uint32_t const text_width { content.width - gutter };
 
     auto const selected_range { selection() };
     auto const is_selected = [&](Position in_buffer) -> bool {
@@ -395,10 +457,34 @@ auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Them
             return std::nullopt;
         };
 
-        for (uint32_t column { 0 }; column < content.width; ++column) {
+        // the gutter: this row's line number, right-aligned, dimmed -
+        // except the cursor's, which reads in the regular text color
+        if (gutter > 0) {
+            std::string const number {
+                buffer_line < _buffer->line_count() ? std::to_string(buffer_line + 1)
+                                                    : std::string()
+            };
+            uint32_t const digits { gutter - 1 };
+            Color const number_color { at_cursor ? text : gutter_text };
+            for (uint32_t column { 0 }; column < gutter; ++column) {
+                uint32_t const align { digits - static_cast<uint32_t>(number.size()) };
+                std::string_view const glyph {
+                    column >= align && column < digits
+                        ? std::string_view(number).substr(column - align, 1)
+                        : std::string_view(" ")
+                };
+                paint_cell(
+                    grid,
+                    { content.position.line + row, content.position.column + column, 0 },
+                    glyph, number_color, row_background
+                );
+            }
+        }
+
+        for (uint32_t column { 0 }; column < text_width; ++column) {
             Position const cell {
                 content.position.line + row,
-                content.position.column + column,
+                content.position.column + gutter + column,
                 0,
             };
             std::string_view glyph { " " };
@@ -451,11 +537,12 @@ auto Pane::draw_scrollbar(Grid& grid, Rectangle area, bool focused, Theme const&
 
 auto Pane::position_from_screen(Rectangle area, Position screen) const -> Position {
     auto const content { content_area(area) };
+    uint32_t const text_start { content.position.column + gutter_width(content) };
     uint32_t const line {
         screen.line > content.position.line ? screen.line - content.position.line : 0
     };
     uint32_t const column {
-        screen.column > content.position.column ? screen.column - content.position.column : 0
+        screen.column > text_start ? screen.column - text_start : 0
     };
     return clamp({ _scroll.line + line, _scroll.column + column, 0 });
 }
@@ -478,11 +565,13 @@ auto Pane::cursor_screen_position(Rectangle area) const -> Position {
             0,
         };
     }
+    uint32_t const gutter { gutter_width(content) };
     uint32_t const line { _cursor.line - _scroll.line };
     uint32_t const column { _cursor.column - _scroll.column };
     return {
         content.position.line + (line < content.height ? line : 0),
-        content.position.column + (column < content.width ? column : 0),
+        content.position.column + gutter
+            + (column < content.width - gutter ? column : 0),
         0,
     };
 }

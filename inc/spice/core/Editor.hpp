@@ -11,8 +11,11 @@ namespace spice::core {
 //! The core text-editing engine (README: editing lives in the core, not in
 //! plugins). Applies one key to a pane viewing an editable buffer:
 //!
-//! - characters insert, ENTER splits, BACKSPACE/DELETE remove (joining
-//!   lines at the edges), all through the capability-checked Buffer API;
+//! - characters insert, ENTER splits (the new line inheriting the old
+//!   one's leading spaces), BACKSPACE/DELETE remove (joining lines at the
+//!   edges), all through the capability-checked Buffer API;
+//! - TAB indents - four spaces at the cursor, or every line a selection
+//!   touches - and SHIFT-TAB dedents them;
 //! - arrows, HOME/END and PAGE-UP/DOWN move the cursor (`page_rows` is the
 //!   page jump, usually the pane's content height);
 //! - SHIFT + movement extends a selection, plain movement drops it, ESCAPE

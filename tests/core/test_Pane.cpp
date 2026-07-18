@@ -40,10 +40,12 @@ TEST_CASE("core::Pane draws title bar, borders and content into a grid") {
     CHECK_EQ(grid.char_at({ 4, 19, 0 }), "╯");
     CHECK_EQ(grid.char_at({ 4, 5, 0 }), "─");
 
-    // content inside the chrome
-    CHECK_EQ(grid.char_at({ 1, 1, 0 }), "h");
-    CHECK_EQ(grid.char_at({ 1, 5, 0 }), "o");
-    CHECK_EQ(grid.char_at({ 2, 1, 0 }), "w");
+    // content inside the chrome: the gutter's line numbers, then the text
+    CHECK_EQ(grid.char_at({ 1, 1, 0 }), "1");
+    CHECK_EQ(grid.char_at({ 1, 3, 0 }), "h");
+    CHECK_EQ(grid.char_at({ 1, 7, 0 }), "o");
+    CHECK_EQ(grid.char_at({ 2, 1, 0 }), "2");
+    CHECK_EQ(grid.char_at({ 2, 3, 0 }), "w");
 }
 
 TEST_CASE("core::Pane title bar buttons: F floats, x closes, both red") {
@@ -176,17 +178,18 @@ TEST_CASE("core::Pane draws the selection with the selection colors") {
     pane.set_cursor({ 0, 3, 0 }); // "el" selected
 
     pane.draw(grid, { { 0, 0, 0 }, 12, 4 }, true, theme);
+    // text sits right of the two-column gutter
     CHECK_EQ(
-        grid.background_at({ 1, 2, 0 }), // 'e'
+        grid.background_at({ 1, 4, 0 }), // 'e'
         theme.color(Theme::Usage::selection_background)
     );
     CHECK_EQ(
-        grid.background_at({ 1, 3, 0 }), // 'l'
+        grid.background_at({ 1, 5, 0 }), // 'l'
         theme.color(Theme::Usage::selection_background)
     );
     // unselected neighbours sit on the (focused) cursor's line highlight
-    CHECK_EQ(grid.background_at({ 1, 1, 0 }), theme.color(Theme::Usage::cursor_line)); // 'h'
-    CHECK_EQ(grid.background_at({ 1, 4, 0 }), theme.color(Theme::Usage::cursor_line)); // second 'l'
+    CHECK_EQ(grid.background_at({ 1, 3, 0 }), theme.color(Theme::Usage::cursor_line)); // 'h'
+    CHECK_EQ(grid.background_at({ 1, 6, 0 }), theme.color(Theme::Usage::cursor_line)); // second 'l'
 }
 
 TEST_CASE("core::Pane read-only flag shows [ro] in the title") {
@@ -251,4 +254,35 @@ TEST_CASE("core::Pane tiny areas draw nothing and stay safe") {
     pane.draw(grid, { { 0, 0, 0 }, 1, 1 }, true, theme);
     pane.draw(grid, { { 0, 0, 0 }, 0, 0 }, true, theme);
     CHECK(Pane::content_area({ { 0, 0, 0 }, 2, 2 }).width == 0);
+}
+
+TEST_CASE("core::Pane wide edit panes grow a line-number gutter") {
+    Grid grid { 40, 10 };
+    Theme theme;
+    Pane pane { PaneType::edit, make_buffer("alpha\nbeta") };
+    Rectangle const area { { 0, 0, 0 }, 30, 6 };
+
+    pane.draw(grid, area, true, theme);
+    // content starts at (1,1): "1", a space, then the text
+    CHECK_EQ(grid.char_at({ 1, 1, 0 }), "1");
+    CHECK_EQ(grid.char_at({ 1, 2, 0 }), " ");
+    CHECK_EQ(grid.char_at({ 1, 3, 0 }), "a");
+    CHECK_EQ(grid.char_at({ 2, 1, 0 }), "2");
+    CHECK_EQ(grid.char_at({ 2, 3, 0 }), "b");
+
+    // clicks and the cursor cell both live past the gutter
+    CHECK_EQ(pane.position_from_screen(area, { 1, 3, 0 }), Position { 0, 0, 0 });
+    pane.set_cursor({ 0, 0, 0 });
+    CHECK_EQ(pane.cursor_screen_position(area), Position { 1, 3, 0 });
+}
+
+TEST_CASE("core::Pane narrow panes keep every column for text") {
+    Grid grid { 20, 6 };
+    Theme theme;
+    Pane pane { PaneType::edit, make_buffer("narrow") };
+    Rectangle const area { { 0, 0, 0 }, 10, 4 }; // content width 8: no room
+
+    pane.draw(grid, area, false, theme);
+    CHECK_EQ(grid.char_at({ 1, 1, 0 }), "n"); // text starts flush left
+    CHECK_EQ(pane.position_from_screen(area, { 1, 1, 0 }), Position { 0, 0, 0 });
 }

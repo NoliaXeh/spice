@@ -105,8 +105,16 @@ private:
     auto clamp(Position position) const -> Position;
     auto scroll_to_cursor(Rectangle content) -> void;
 
+    //! The line-number gutter's width inside `content` - digits plus a
+    //! separator space. Zero for non-edit panes, and zero when the pane
+    //! is too narrow to give the columns away.
+    auto gutter_width(Rectangle content) const -> uint32_t;
+
     // draw()'s parts, in paint order
     auto draw_title_bar(Grid& grid, Rectangle area, bool focused, Theme const& theme)
+        -> void;
+    //! The cursor's line:column, right-aligned on the title bar (edit panes).
+    auto draw_cursor_indicator(Grid& grid, Rectangle area, bool focused, Theme const& theme)
         -> void;
     auto draw_border(Grid& grid, Rectangle area, bool focused, Theme const& theme) -> void;
     //! The live emulator screen of a PTY pane.

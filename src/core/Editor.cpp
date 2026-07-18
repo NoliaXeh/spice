@@ -4,6 +4,63 @@ namespace {
 
 using namespace spice::core;
 
+//! Spaces per TAB press, and per SHIFT-TAB dedent.
+constexpr uint32_t indent_width { 4 };
+
+//! The line's leading spaces, capped at `limit`.
+auto leading_spaces(Buffer const& buffer, uint32_t line, uint32_t limit) -> uint32_t {
+    std::string_view const text { buffer.line(line) };
+    uint32_t count { 0 };
+    while (count < text.size() && count < limit && text[count] == ' ') {
+        ++count;
+    }
+    return count;
+}
+
+//! TAB and SHIFT-TAB: indentation. A bare TAB inserts spaces at the
+//! cursor; with a selection it indents every line the selection touches.
+//! SHIFT-TAB removes up to one indent of leading spaces from those lines.
+auto apply_tab_key(Pane& pane, Buffer& buffer, bool dedent) -> bool {
+    Position const cursor { pane.cursor() };
+    auto const range { pane.selection() };
+    if (!dedent && !range) {
+        if (!buffer.insert(cursor, std::string(indent_width, ' '))) {
+            return false;
+        }
+        pane.set_cursor({ cursor.line, cursor.column + indent_width, 0 });
+        return true;
+    }
+
+    uint32_t const first { range ? range->first.line : cursor.line };
+    uint32_t last { range ? range->second.line : cursor.line };
+    if (range && last > first && range->second.column == 0) {
+        --last; // the selection ends before that line's first character
+    }
+    bool changed { false };
+    uint32_t cursor_shift { 0 };
+    for (uint32_t line { first }; line <= last; ++line) {
+        if (dedent) {
+            uint32_t const remove { leading_spaces(buffer, line, indent_width) };
+            if (remove > 0 && buffer.erase_range({ line, 0, 0 }, { line, remove, 0 })) {
+                changed = true;
+                if (line == cursor.line) {
+                    cursor_shift = remove;
+                }
+            }
+        } else {
+            changed |= buffer.insert({ line, 0, 0 }, std::string(indent_width, ' '));
+        }
+    }
+    if (changed && dedent) { // the cursor stays on its character
+        pane.set_cursor({
+            cursor.line,
+            cursor.column > cursor_shift ? cursor.column - cursor_shift : 0,
+            0,
+        });
+    }
+    return changed;
+}
+
 //! True for keys that move the cursor (and so extend or drop a selection).
 auto is_movement(Key key) -> bool {
     switch (key) {
@@ -125,12 +182,24 @@ auto apply_mutation_key(
     case Key::enter: {
         erase_selection(pane, buffer);
         Position const at { pane.cursor() };
-        if (buffer.split_line(at)) {
-            pane.set_cursor({ at.line + 1, 0, 0 });
-            return true;
+        if (!buffer.split_line(at)) {
+            return false;
         }
-        return false;
+        // auto-indent: the new line opens where the old one's text began
+        uint32_t const indent {
+            leading_spaces(buffer, at.line, buffer.line_length(at.line))
+        };
+        uint32_t applied { 0 };
+        if (indent > 0
+            && buffer.insert({ at.line + 1, 0, 0 }, std::string(indent, ' '))) {
+            applied = indent;
+        }
+        pane.set_cursor({ at.line + 1, applied, 0 });
+        return true;
     }
+
+    case Key::tab:
+        return apply_tab_key(pane, buffer, key.mods.shift);
 
     case Key::backspace:
         return erase_selection(pane, buffer) || apply_backspace(pane, buffer);
@@ -163,6 +232,7 @@ auto apply_editing_key(
         switch (key.key) {
         case Key::character:
         case Key::enter:
+        case Key::tab:
         case Key::backspace:
         case Key::del:
             return false;

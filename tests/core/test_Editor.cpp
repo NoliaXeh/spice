@@ -125,3 +125,53 @@ TEST_CASE("core::apply_editing_key rejects what the buffer rejects") {
     ));
     CHECK_EQ(log->line(0), "ro");
 }
+
+TEST_CASE("core::apply_editing_key TAB indents, SHIFT-TAB dedents") {
+    Setup s { "hello" };
+    CHECK(s.key(Key::tab)); // at the cursor: four spaces in
+    CHECK_EQ(s.buffer->line(0), "    hello");
+    CHECK_EQ(s.pane.cursor().column, 4u);
+
+    CHECK(s.key(Key::tab, {}, true)); // shift: the indent comes back off
+    CHECK_EQ(s.buffer->line(0), "hello");
+    CHECK_EQ(s.pane.cursor().column, 0u);
+
+    CHECK_FALSE(s.key(Key::tab, {}, true)); // nothing left to dedent
+}
+
+TEST_CASE("core::apply_editing_key TAB indents every selected line") {
+    Setup s { "one\ntwo\nthree" };
+    s.pane.set_anchor({ 0, 1, 0 });
+    s.pane.set_cursor({ 1, 2, 0 }); // selection touches lines 0 and 1
+
+    CHECK(s.key(Key::tab));
+    CHECK_EQ(s.buffer->line(0), "    one");
+    CHECK_EQ(s.buffer->line(1), "    two");
+    CHECK_EQ(s.buffer->line(2), "three"); // untouched
+
+    CHECK(s.key(Key::tab, {}, true)); // and back
+    CHECK_EQ(s.buffer->line(0), "one");
+    CHECK_EQ(s.buffer->line(1), "two");
+}
+
+TEST_CASE("core::apply_editing_key ENTER inherits the line's indent") {
+    Setup s { "    body" };
+    s.pane.set_cursor({ 0, 8, 0 }); // end of line
+    CHECK(s.key(Key::enter));
+    CHECK_EQ(s.buffer->line(0), "    body");
+    CHECK_EQ(s.buffer->line(1), "    ");
+    CHECK_EQ(s.pane.cursor(), Position { 1, 4, 0 });
+
+    // at column 0 there is nothing above to inherit
+    s.pane.set_cursor({ 0, 0, 0 });
+    CHECK(s.key(Key::enter));
+    CHECK_EQ(s.buffer->line(0), "");
+    CHECK_EQ(s.pane.cursor(), Position { 1, 0, 0 });
+}
+
+TEST_CASE("core::apply_editing_key TAB respects read-only panes") {
+    Setup s { "hello" };
+    s.pane.set_read_only(true);
+    CHECK_FALSE(s.key(Key::tab));
+    CHECK_EQ(s.buffer->line(0), "hello");
+}
