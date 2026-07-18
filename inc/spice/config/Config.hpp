@@ -52,13 +52,13 @@ struct Config {
     std::vector<Keybind> user_keybinds;  //!< from config.toml: never written
     std::vector<Keybind> state_keybinds; //!< from keybinds.toml: Spice-owned
 
-    // [lifecycle] (consumed once plugins arrive; parsed and kept already)
+    // [lifecycle]
     std::chrono::milliseconds shutdown_grace { 2000 };
     std::chrono::milliseconds sigterm_grace { 1000 };
 
-    // [log] (consumed once the logger arrives; parsed and kept already)
+    // [log]: the level filters the log pane; the file, when set, gets all
     LogLevel log_level { LogLevel::info };
-    std::string log_file; //!< defaulted to the state directory
+    std::string log_file; //!< empty: no file sink
 
     //! Problems found while loading, for surfacing to the user. A bad or
     //! missing file never prevents startup: defaults fill every hole.

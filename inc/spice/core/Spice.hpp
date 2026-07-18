@@ -39,6 +39,13 @@ public:
     ) -> std::shared_ptr<Buffer>;
     auto buffers() const -> std::vector<std::shared_ptr<Buffer>> const&;
 
+    //! Drops a buffer from the session; false when it is shown in a pane
+    //! (close or repoint the pane first) or not a session buffer.
+    auto kill_buffer(std::shared_ptr<Buffer> const& buffer) -> bool;
+
+    //! Points a pane at another session buffer; false if either is unknown.
+    auto set_pane_buffer(uint32_t id, std::shared_ptr<Buffer> buffer) -> bool;
+
     //! Opens a tiled pane on a buffer, splitting the focused tile (or
     //! filling the screen for the first pane). Focuses it; returns its id.
     //! This overload picks the orientation from the tile's shape.
@@ -72,6 +79,20 @@ public:
 
     //! Propagates each pty pane's current content size to its pty.
     auto resize_ptys() -> void;
+
+    // -- plugin-drawn surfaces (grid panes) --------------------------
+    //! The surface behind a grid pane, creating it at the pane's content
+    //! size on first use. Empty when the pane is unknown or not a grid.
+    auto attach_surface(uint32_t id) -> OptRef<Grid>;
+    //! The existing surface, if any (no creation).
+    auto surface(uint32_t id) -> OptRef<Grid>;
+    //! Detaches and drops a pane's surface: back to showing its buffer.
+    auto clear_surface(uint32_t id) -> void;
+    //! Where the plugin parked the pane's cursor (hidden when !visible).
+    auto set_surface_cursor(uint32_t id, Position position, bool visible) -> void;
+    //! Recreates every surface, blank, at its pane's current content size
+    //! (plugins redraw on spice.pane.resized).
+    auto resize_surfaces() -> void;
 
     //! Closes the focused pane; its buffer survives. When pane_count()
     //! reaches 0 the program should end (README).
@@ -124,6 +145,7 @@ private:
     std::vector<std::shared_ptr<Buffer>> _buffers;
     std::map<uint32_t, Pane> _panes;
     std::map<uint32_t, PtyEntry> _ptys;
+    std::map<uint32_t, Grid> _surfaces; //!< plugin-drawn grid pane content
     Layout _layout;
     uint32_t _focused { 0 };
 };

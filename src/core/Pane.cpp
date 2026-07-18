@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -45,6 +47,16 @@ auto Pane::buffer() const -> std::shared_ptr<Buffer> const& {
     return _buffer;
 }
 
+auto Pane::set_buffer(std::shared_ptr<Buffer> buffer) -> void {
+    if (buffer == nullptr) {
+        return;
+    }
+    _buffer = std::move(buffer);
+    _cursor = { 0, 0, 0 };
+    _scroll = { 0, 0, 0 };
+    _anchor.reset();
+}
+
 auto Pane::cursor() const -> Position {
     return _cursor;
 }
@@ -63,6 +75,17 @@ auto Pane::set_read_only(bool read_only) -> void {
 
 auto Pane::set_terminal(OptRef<Terminal const> terminal) -> void {
     _terminal = terminal;
+}
+
+auto Pane::set_surface(OptRef<Grid const> surface) -> void {
+    _surface = surface;
+    if (!surface) {
+        _surface_cursor.reset();
+    }
+}
+
+auto Pane::set_surface_cursor(std::optional<Position> cursor) -> void {
+    _surface_cursor = cursor;
 }
 
 auto Pane::set_anchor(Position position) -> void {
@@ -186,6 +209,10 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
         draw_terminal_content(grid, content, theme);
         return;
     }
+    if (_surface) { // a plugin paints this pane
+        draw_surface_content(grid, content, theme);
+        return;
+    }
     draw_buffer_content(grid, content, focused, theme);
     draw_scrollbar(grid, area, focused, theme);
 }
@@ -293,6 +320,28 @@ auto Pane::draw_terminal_content(Grid& grid, Rectangle content, Theme const& the
     }
 }
 
+auto Pane::draw_surface_content(Grid& grid, Rectangle content, Theme const& theme) -> void {
+    Color const text { theme.color(Theme::Usage::text) };
+    Color const background { theme.color(Theme::Usage::background) };
+
+    for (uint32_t row { 0 }; row < content.height; ++row) {
+        for (uint32_t column { 0 }; column < content.width; ++column) {
+            Position const source { row, column, 0 };
+            bool const in_surface {
+                row < _surface->height() && column < _surface->width()
+            };
+            std::string_view const glyph { in_surface ? _surface->char_at(source) : " " };
+            paint_cell(
+                grid,
+                { content.position.line + row, content.position.column + column, 0 },
+                glyph.empty() ? " " : glyph,
+                in_surface ? _surface->style_at(source) : text,
+                in_surface ? _surface->background_at(source) : background
+            );
+        }
+    }
+}
+
 auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Theme const& theme)
     -> void {
     Color const text { theme.color(Theme::Usage::text) };
@@ -309,14 +358,42 @@ auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Them
     };
 
     for (uint32_t row { 0 }; row < content.height; ++row) {
-        std::string_view const line { _buffer->line(_scroll.line + row) };
+        uint32_t const buffer_line { _scroll.line + row };
+        std::string_view const line { _buffer->line(buffer_line) };
         size_t offset { utf8_offset(line, _scroll.column) };
 
         // the cursor's line gets a subtly lifted background when focused
         bool const at_cursor {
-            focused && _type == PaneType::edit && _scroll.line + row == _cursor.line
+            focused && _type == PaneType::edit && buffer_line == _cursor.line
         };
         Color const row_background { at_cursor ? cursor_line : background };
+
+        // only this line's highlight spans, so the cell loop stays cheap
+        std::vector<std::reference_wrapper<Buffer::Highlight const>> row_spans;
+        for (Buffer::Highlight const& span : _buffer->highlights()) {
+            if (span.start_line <= buffer_line && buffer_line <= span.end_line) {
+                row_spans.emplace_back(span);
+            }
+        }
+        auto const highlighted = [&](size_t byte) -> std::optional<Color> {
+            for (Buffer::Highlight const& span : row_spans) {
+                bool const after_start {
+                    buffer_line > span.start_line || byte >= span.start_byte
+                };
+                bool const before_end {
+                    buffer_line < span.end_line || byte < span.end_byte
+                };
+                if (after_start && before_end) {
+                    return Color {
+                        static_cast<uint8_t>(span.rgb >> 16U),
+                        static_cast<uint8_t>(span.rgb >> 8U),
+                        static_cast<uint8_t>(span.rgb),
+                        text.style,
+                    };
+                }
+            }
+            return std::nullopt;
+        };
 
         for (uint32_t column { 0 }; column < content.width; ++column) {
             Position const cell {
@@ -325,17 +402,23 @@ auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Them
                 0,
             };
             std::string_view glyph { " " };
-            if (offset < line.size()) {
+            size_t const glyph_byte { offset };
+            bool const in_line { offset < line.size() };
+            if (in_line) {
                 glyph = line.substr(offset, utf8_length(line[offset]));
                 offset += glyph.size();
             }
-            Position const in_buffer {
-                _scroll.line + row, _scroll.column + column, 0
-            };
-            if (is_selected(in_buffer)) {
+            Position const in_buffer { buffer_line, _scroll.column + column, 0 };
+            if (is_selected(in_buffer)) { // selection beats decoration
                 paint_cell(grid, cell, glyph, selection_text, selection_background);
             } else {
-                paint_cell(grid, cell, glyph, text, row_background);
+                Color style { text };
+                if (in_line && !row_spans.empty()) {
+                    if (auto const color { highlighted(glyph_byte) }) {
+                        style = *color;
+                    }
+                }
+                paint_cell(grid, cell, glyph, style, row_background);
             }
         }
     }
@@ -385,6 +468,13 @@ auto Pane::cursor_screen_position(Rectangle area) const -> Position {
         return {
             content.position.line + std::min(cursor.line, content.height - 1),
             content.position.column + std::min(cursor.column, content.width - 1),
+            0,
+        };
+    }
+    if (_surface && _surface_cursor && content.width > 0 && content.height > 0) {
+        return { // wherever the plugin parked it, clamped into the view
+            content.position.line + std::min(_surface_cursor->line, content.height - 1),
+            content.position.column + std::min(_surface_cursor->column, content.width - 1),
             0,
         };
     }

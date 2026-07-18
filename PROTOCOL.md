@@ -179,10 +179,8 @@ they are the entire point. They are emitted identically in both cases; plugins t
 simply do not subscribe.
 
 ### `spice.palette.`
-`command_invoked` `{plugin, command, pane, buffer}` · `keybind_triggered` `{plugin, command, pane}`
-
-### `spice.control.`
-Pane/focus movement, as an observable category: `focus_moved`, `pane_moved`.
+`command_invoked` `{plugin, command, pane, buffer}` · `keybind_triggered` `{plugin, command, pane}` ·
+`command_cancel` `{plugin, command, pane}` (see Commands)
 
 ## Buffers
 
@@ -256,7 +254,7 @@ request  buffer.splice  { buffer, range, text, version }
 
 Insert is an empty `range`. Delete is an empty `text`.
 
-Batched, atomic, **one** version bump:
+Batched, atomic, **one** version bump and one undo step:
 
 ```
 request  buffer.splice_many  { buffer, splices: [{range, text}, ...], version }
@@ -264,7 +262,7 @@ request  buffer.splice_many  { buffer, splices: [{range, text}, ...], version }
 ```
 
 Splices must be **non-overlapping**, and all positions are relative to the cited base version.
-Overlapping splices fail with `spice.core.bad_params`.
+Overlapping or out-of-buffer splices fail with `spice.core.bad_params`, applying nothing.
 
 `splice_many` is not an optimisation, it is a requirement: "format the whole file" as 400 individual
 splices would be 400 version bumps, rejecting every other plugin 400 times.
@@ -277,7 +275,43 @@ event  spice.buffer.changed
 ```
 
 Incremental, always. Without this a plugin must refetch the entire buffer on every keystroke, and
-the mirror strategy that makes versions livable becomes impossible.
+the mirror strategy that makes versions livable becomes impossible. (`splices` is omitted only
+when the core's change journal overflowed between events; refetch then.)
+
+### Highlights
+
+Decoration, not content: colored spans painted over a buffer's text wherever it is shown.
+
+```
+notify  buffer.set_highlights  { buffer, highlights: [{range, fg}, ...] }
+```
+
+- Replaces the buffer's **whole** set - one set per buffer, last writer wins.
+- `fg` is `0xRRGGBB`; ranges are byte-addressed like every range here. Selection beats
+  decoration when both cover a cell.
+- The core never rebases or invalidates them: after an edit they may briefly sit on the
+  wrong bytes until their owner recomputes against the new content. Subscribe to
+  `spice.buffer.changed` and resend; a stale frame of color is acceptable where a stale
+  write never is.
+
+### Marks
+
+Stable anchors the core moves as text changes around them. Versions solve *"my write is
+stale"*; marks solve *"my remembered location is stale"* - diagnostics underlines,
+breakpoints, folds.
+
+```
+request  mark.set     { buffer, pos: {line, col}, gravity?: "left" | "right" }  → { mark }
+request  mark.get     { buffer, mark }  → { pos, valid, version }
+request  mark.delete  { buffer, mark }  → { }
+```
+
+- **Gravity** decides where an insertion *exactly at* the mark leaves it: `left` (default)
+  keeps the mark before the inserted text; `right` pushes it after.
+- **Invalidation is loud.** Deleting the text a mark sits inside does not silently relocate
+  it: the mark parks at the deletion point with `valid: false`. It keeps tracking from
+  there; treat `valid: false` as "re-derive this location".
+- Mark ids are per buffer, monotonically allocated, never reused.
 
 ## Grid (GridPane)
 
@@ -379,8 +413,16 @@ registered is a no-op that tells the user why.
 notify  keybind.set  { key, mods, plugin, command }
 ```
 
-**Cancellation is a clean future addition:** a command declares `cancellable: true`, the core sends
-`command_cancel`. No message defined here changes shape. That is why it can wait.
+**Cancellation** stays fire-and-forget: a command declared with `cancellable: true` makes the
+core offer a transient *Cancel: <title>* palette entry once the command is invoked. Picking it
+emits:
+
+```
+event  spice.palette.command_cancel  { plugin, command, pane }
+```
+
+The entry withdraws itself once used (and with the plugin's death). Nothing is tracked: the
+plugin may already have finished, and must tolerate a cancel for work it no longer remembers.
 
 ## Broadcast
 
@@ -409,7 +451,17 @@ Rules:
   through this channel.
 - **Ordering** is preserved per source→destination pair. Nothing is guaranteed across pairs.
 - **Loops are the plugins' problem.** A reacts to B, B reacts to A. The core cannot detect this
-  semantically and will not try. It rate-limits and logs.
+  semantically and will not try. It rate-limits and logs: past **100 broadcasts per second**
+  from one plugin, the rest of that second is dropped (logged once per window).
+
+The topic registry built on `publishes` is queryable:
+
+```
+request  topics.list  { }  → { topics: [{plugin, prefix}, ...] }
+```
+
+Declaring `publishes` in `ready` is still informational - undeclared topics broadcast fine -
+but declared ones are discoverable here instead of being social convention.
 
 **Known long-term risk, accepted with open eyes:** broadcast can become the de facto API, with
 plugins coupling over undocumented topics - a second, unspecified protocol inside the specified one.
@@ -471,14 +523,10 @@ optional `data`.
 
 Deliberately deferred. Each is **additive** - none requires changing a message defined above.
 
-- **Marks.** Stable anchors the core moves as text changes around them. Versions solve *"my write
-  is stale"*; marks solve *"my remembered location is stale"*. Everything that **writes** needs
-  versions; only things that **remember places** (diagnostics underlines, breakpoints, folds,
-  multi-cursor) need marks. Requires a per-buffer mark store, gravity rules (text inserted exactly
-  *at* a mark - before or after?), and an invalidation state. Not needed until a plugin needs it.
-- **Command progress and cancellation.**
-- **Topic registry / plugin discovery**, built on the `publishes` field.
-- **Broadcast rate-limiting policy.**
+- **Command progress reporting** (cancellation exists; progress is `status.message` for now).
+- **`ul_color` and the underline-style bits' rendering** - accepted on the wire, not yet drawn.
+- **Multi-instance pane mode** - a pane-mode plugin gets one dedicated pane at startup, not an
+  instance per pane the user opens.
 
 ## Never
 

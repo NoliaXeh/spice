@@ -53,6 +53,28 @@ auto Spice::buffers() const -> std::vector<std::shared_ptr<Buffer>> const& {
     return _buffers;
 }
 
+auto Spice::kill_buffer(std::shared_ptr<Buffer> const& buffer) -> bool {
+    if (buffer == nullptr) {
+        return false;
+    }
+    for (auto const& [id, pane] : _panes) {
+        if (pane.buffer() == buffer) {
+            return false; // still on screen: the pane keeps it alive
+        }
+    }
+    return std::erase(_buffers, buffer) > 0;
+}
+
+auto Spice::set_pane_buffer(uint32_t id, std::shared_ptr<Buffer> buffer) -> bool {
+    auto const target { pane(id) };
+    if (!target || buffer == nullptr
+        || std::ranges::find(_buffers, buffer) == _buffers.end()) {
+        return false;
+    }
+    target->set_buffer(std::move(buffer));
+    return true;
+}
+
 auto Spice::split_is_horizontal(Rectangle rect) const -> bool {
     // terminal cells are about twice as tall as wide, so a tile is only
     // "wide" once its width passes twice its height
@@ -183,6 +205,62 @@ auto Spice::resize_ptys() -> void {
             entry.pty.resize(columns, rows);
         }
     }
+    resize_surfaces(); // plugin surfaces track their pane's size too
+}
+
+auto Spice::attach_surface(uint32_t id) -> OptRef<Grid> {
+    if (auto existing { surface(id) }) {
+        return existing;
+    }
+    auto const target { pane(id) };
+    if (!target || target->type() != PaneType::grid) {
+        return {};
+    }
+    auto const content { Pane::content_area(pane_area(id).value_or(_screen)) };
+    auto const [slot, inserted] { _surfaces.emplace(
+        id, Grid { std::max(content.width, 1u), std::max(content.height, 1u) }
+    ) };
+    target->set_surface(slot->second);
+    return slot->second;
+}
+
+auto Spice::surface(uint32_t id) -> OptRef<Grid> {
+    auto const found { _surfaces.find(id) };
+    if (found == _surfaces.end()) {
+        return {};
+    }
+    return found->second;
+}
+
+auto Spice::clear_surface(uint32_t id) -> void {
+    if (auto const target { pane(id) }) {
+        target->set_surface({});
+    }
+    _surfaces.erase(id);
+}
+
+auto Spice::set_surface_cursor(uint32_t id, Position position, bool visible) -> void {
+    auto const target { pane(id) };
+    if (target && _surfaces.contains(id)) {
+        target->set_surface_cursor(
+            visible ? std::optional { position } : std::nullopt
+        );
+    }
+}
+
+auto Spice::resize_surfaces() -> void {
+    for (auto& [id, grid] : _surfaces) {
+        auto const content { Pane::content_area(pane_area(id).value_or(_screen)) };
+        uint32_t const width { std::max(content.width, 1u) };
+        uint32_t const height { std::max(content.height, 1u) };
+        if (grid.width() == width && grid.height() == height) {
+            continue;
+        }
+        grid = Grid { width, height }; // blank: the plugin redraws
+        if (auto const target { pane(id) }) {
+            target->set_surface(grid); // same node, fresh contents
+        }
+    }
 }
 
 auto Spice::close_focused_pane() -> void {
@@ -191,8 +269,10 @@ auto Spice::close_focused_pane() -> void {
     }
     if (auto p { pane(_focused) }) {
         p->set_terminal({}); // the entry (and its screen) goes away
+        p->set_surface({});
     }
     _ptys.erase(_focused); // kills the child; the scrollback buffer stays
+    _surfaces.erase(_focused);
     _layout.remove(_focused);
     _panes.erase(_focused); // the buffer stays in _buffers
 

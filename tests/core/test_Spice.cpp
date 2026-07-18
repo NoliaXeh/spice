@@ -96,6 +96,86 @@ TEST_CASE("core::Spice the same buffer can be shown in two panes") {
     CHECK_EQ(session.pane(a)->buffer().get(), session.pane(b)->buffer().get());
 }
 
+TEST_CASE("core::Spice::set_pane_buffer() repoints a pane") {
+    auto session { make_session() };
+    auto first { session.create_buffer("first", core::BufferCapability::editable) };
+    auto second { session.create_buffer("second", core::BufferCapability::editable) };
+    uint32_t const id { session.open_pane(core::PaneType::edit, first) };
+
+    CHECK(session.set_pane_buffer(id, second));
+    CHECK_EQ(session.pane(id)->buffer()->name(), "second");
+    CHECK_FALSE(session.set_pane_buffer(999, second)); // no such pane
+    CHECK_FALSE(session.set_pane_buffer(id, nullptr));
+}
+
+TEST_CASE("core::Spice surfaces: a plugin draws a grid pane") {
+    auto session { make_session() };
+    auto buffer { session.create_buffer("plugin", core::BufferCapability::append_only) };
+    uint32_t const id { session.open_pane(core::PaneType::grid, buffer) };
+
+    auto surface { session.attach_surface(id) };
+    REQUIRE(surface);
+    CHECK(surface->width() > 0);
+    CHECK(session.attach_surface(id) == surface); // idempotent
+
+    surface->set_text({ 0, 0, 0 }, "@");
+    core::Grid screen { 80, 24 };
+    core::Theme theme;
+    session.draw(screen, theme);
+    // the surface cell lands inside the pane's content area
+    auto const area { session.pane_area(id) };
+    REQUIRE(area.has_value());
+    auto const content { core::Pane::content_area(*area) };
+    CHECK_EQ(screen.char_at(content.position), "@");
+
+    session.clear_surface(id); // back to buffer content
+    CHECK_FALSE(session.surface(id));
+}
+
+TEST_CASE("core::Spice highlights color a buffer's text where shown") {
+    auto session { make_session() };
+    auto buffer { session.create_buffer("demo.cpp", core::BufferCapability::editable,
+                                        "int x;") };
+    uint32_t const id { session.open_pane(core::PaneType::edit, buffer) };
+    buffer->set_highlights({ { 0, 0, 0, 3, 0xFF69B4 } }); // "int", in pink
+
+    core::Grid screen { 80, 24 };
+    core::Theme theme;
+    session.draw(screen, theme);
+
+    auto const content { core::Pane::content_area(*session.pane_area(id)) };
+    core::Color const pink { screen.style_at(content.position) };
+    CHECK_EQ(pink.r, 0xFF);
+    CHECK_EQ(pink.g, 0x69);
+    CHECK_EQ(pink.b, 0xB4);
+    // one past the span: back to the theme's text color
+    core::Color const plain {
+        screen.style_at({ content.position.line, content.position.column + 3, 0 })
+    };
+    CHECK_NE(plain.g, 0x69);
+}
+
+TEST_CASE("core::Spice surfaces: only grid panes accept one") {
+    auto session { make_session() };
+    auto buffer { session.create_buffer("text", core::BufferCapability::editable) };
+    uint32_t const id { session.open_pane(core::PaneType::edit, buffer) };
+    CHECK_FALSE(session.attach_surface(id));
+    CHECK_FALSE(session.attach_surface(999)); // no such pane
+}
+
+TEST_CASE("core::Spice::kill_buffer() refuses buffers on screen") {
+    auto session { make_session() };
+    auto shown { session.create_buffer("shown", core::BufferCapability::editable) };
+    auto idle { session.create_buffer("idle", core::BufferCapability::editable) };
+    session.open_pane(core::PaneType::edit, shown);
+    REQUIRE_EQ(session.buffers().size(), 2u);
+
+    CHECK_FALSE(session.kill_buffer(shown)); // a pane shows it
+    CHECK(session.kill_buffer(idle));
+    CHECK_EQ(session.buffers().size(), 1u);
+    CHECK_FALSE(session.kill_buffer(idle)); // already gone
+}
+
 TEST_CASE("core::Spice::move_focus() crosses the split") {
     auto session { make_session() };
     uint32_t const first { session.open_welcome_pane() };

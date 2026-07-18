@@ -24,6 +24,7 @@ public:
         std::string title; //!< what is listed and filtered on
         std::string hint;  //!< right-aligned, discreetly colored extra
                            //!< (a key shortcut); often empty
+        std::string description {}; //!< dimmed after the title, when it fits
     };
 
     //! What a key did, so the caller knows how to react.

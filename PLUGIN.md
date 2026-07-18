@@ -179,8 +179,13 @@ event  spice.lifecycle.hello
   { protocol: "0.1",
     plugin: 1,               # your numeric id, for this run
     name: "wordcount",       # your name from config.toml
-    mode: "global" }         # or "pane"
+    mode: "global",          # or "pane"
+    pane: 4, buffer: 9 }     # pane mode only: your own grid pane and buffer
 ```
+
+A **pane-mode** plugin (`mode = "pane"` in config) is given a dedicated grid pane and
+buffer before its hello; draw to the pane with `grid.update` and treat it as yours. A
+global plugin gets neither and works with what the session shows.
 
 You answer with `ready` - this is the handshake, and until you send it **everything else you send
 is ignored**:
@@ -215,6 +220,12 @@ send.
 If you exit at any other time, Spice notices, unregisters your commands, and tells the user.
 Keybinds pointing at your commands become no-ops that explain why.
 
+Whether you come back is your `restart` policy in config (see
+[Installing a plugin](#installing-a-plugin)): `on-crash` relaunches you unless you exited by
+yourself with status 0 (a clean exit stays dead); `always` relaunches either way - each at
+most `max_restarts` times per `restart_window`, then Spice gives up and says so. A relaunch
+is a fresh process: you get `hello` again and re-register everything.
+
 Dying *before* your handshake is reported too - so a plugin that crashes on startup is a visible
 failure, not a mystery. **Your stderr is captured and logged**, at `warn`. It is the only channel a
 crashing plugin still has; use it freely, and check it when a plugin "does nothing".
@@ -243,21 +254,43 @@ notify  subscribe  { subscribe: ["spice.pane.", "lint."] }
 
 ### The events Spice sends today
 
-This is the complete list. It is short, and honestly so.
+This is the complete list.
 
 ```
-event  spice.lifecycle.hello        { protocol, plugin, name, mode }
-event  spice.lifecycle.shutdown     { grace_ms }
-event  spice.palette.command_invoked { plugin, command, pane, buffer? }
-event  spice.pane.focused           { pane }
-event  spice.buffer.changed         { buffer, to_version }
+event  spice.lifecycle.hello           { protocol, plugin, name, mode }
+event  spice.lifecycle.shutdown        { grace_ms }
+event  spice.palette.command_invoked   { plugin, command, pane, buffer? }
+event  spice.palette.keybind_triggered { plugin, command, pane }
+event  spice.palette.command_cancel    { plugin, command, pane }
+event  spice.pane.opened               { pane, kind, buffer }
+event  spice.pane.closed               { pane }
+event  spice.pane.focused              { pane }
+event  spice.pane.unfocused            { pane }
+event  spice.pane.floated              { pane }
+event  spice.pane.docked               { pane }
+event  spice.pane.resized              { pane, rows, cols }
+event  spice.pane.buffer_set           { pane, buffer }
+event  spice.buffer.created            { buffer, caps }
+event  spice.buffer.killed             { buffer }
+event  spice.buffer.changed            { buffer, from_version, to_version, splices? }
+event  spice.buffer.dirty_changed      { buffer, dirty }
+event  spice.input.key                 { pane, key, mods }
+event  spice.input.mouse               { pane, kind, row, col, mods }
 ```
 
-Two caveats worth knowing before you design:
+**Joining late is fine.** When your handshake completes, Spice replays the current world:
+you receive `created` / `opened` / `focused` events for everything that already exists.
+The other plugins see those repeats too - treat `created` and `opened` as upserts.
 
-- `spice.buffer.changed` currently fires **only for splices plugins make**, and carries no
-  detail of the change beyond the new version. **You will not be told when the user types.**
-  A plugin that must track user edits cannot be written yet.
+Worth knowing before you design:
+
+- Pane and buffer events report the session as it *is*, whoever changed it - the user, you,
+  or another plugin. `spice.buffer.changed` fires for **every** change, user typing included,
+  and carries the incremental `splices` (byte-column ranges, see [Buffers](#buffers)) - the
+  mirror strategy from PROTOCOL.md works. When `splices` is absent the change journal
+  overflowed: refetch the buffer instead of patching.
+- `spice.input.mouse` includes motion, which floods during drags. Subscribe to
+  `spice.input.key` alone if keys are all you need.
 - The lifecycle events arrive whether or not you subscribe to them.
 
 ---
@@ -267,13 +300,18 @@ Two caveats worth knowing before you design:
 A command is how a plugin gets into the palette. Declare them in `ready`, or later:
 
 ```
-notify  command.register    { commands: [{name, title, description?}] }
+notify  command.register    { commands: [{name, title, description?, cancellable?}] }
 notify  command.unregister  { names: ["count"] }
 ```
 
 `name` is your identifier (`count`). `title` is what the user reads in the palette
-(`Word count`) - write it for a human. Registration is dynamic: an LSP plugin should offer
-*Go to definition* only once a server has attached, and withdraw it when the server dies.
+(`Word count`) - write it for a human. `description` shows dimmed after the title when
+there is room. Registration is dynamic: an LSP plugin should offer *Go to definition* only
+once a server has attached, and withdraw it when the server dies.
+
+A command declared `cancellable: true` makes Spice offer a *Cancel: <title>* palette entry
+once it has been invoked; picking it sends you `spice.palette.command_cancel`. You are free
+to have already finished - treat a late cancel as a no-op.
 
 When the user runs one, you get an event - **if you subscribed to it**:
 
@@ -289,15 +327,19 @@ event  spice.palette.command_invoked
 You are not expected to reply - you do the work and report through the ordinary channels:
 `status.message` for progress, `status.error` for failure.
 
-This is the *only* way to learn a `buffer` id, so `command_invoked` is where most plugins start.
+Buffer ids also arrive in `spice.buffer.created` and `spice.pane.opened` events, but
+`command_invoked` hands you the one the user *means* - it is where most plugins start.
 
 ### Keybinds
 
 ```
 notify  keybind.set  { key: "ctrl-g", plugin: "wordcount", command: "count" }
+notify  keybind.set  { key: "g", mods: ["ctrl"], plugin: "wordcount", command: "count" }
 ```
 
-`key` is a config-style key name - `ctrl-g`, `alt-left`, `f5`, `ctrl-space`, `shift-return`.
+`key` is a config-style key name - `ctrl-g`, `alt-left`, `f5`, `ctrl-space`, `shift-return` -
+with modifiers either folded into the name or passed separately in `mods`; both forms above
+bind the same key.
 Binds point at **`(plugin, command)`, never at an id**, so restarting or re-registering never
 orphans a user's keybinds. A bind pointing at a command nobody has registered is a no-op that tells
 the user why.
@@ -316,9 +358,11 @@ id, which you learn from `command_invoked` or from creating one.
 ```
 request  buffer.info       { buffer }              → { line_count, version, caps, dirty, name }
 request  buffer.get_lines  { buffer, start, end }  → { lines: [str], version }
+request  buffer.get_text   { buffer, range }       → { text, version }
 ```
 
-`end` is exclusive; `-1` means "to the end".
+`end` is exclusive; `-1` means "to the end". `get_text`'s range is clamped into the buffer,
+so `{start: {line: 0, col: 0}, end: {line: -1, col: -1}}` reads everything.
 
 ```
 request  buffer.splice  { buffer, range, text, version }
@@ -331,6 +375,34 @@ dropped**. Re-read, redo your work against the new content, try again. This is t
 concurrency model: staleness is loud.
 
 Insert is a splice with an empty `range`. Delete is a splice with empty `text`.
+
+Many edits computed against one read - a formatter's output - go in **one batch**, atomically:
+
+```
+request  buffer.splice_many  { buffer, splices: [{range, text}, ...], version }
+         → { version: <new> }
+```
+
+Every range cites the base `version` - do not adjust later splices for earlier ones, Spice
+does that. Splices must be non-overlapping and inside the buffer, or the whole batch is
+refused with `spice.core.bad_params` and nothing is applied. The batch costs exactly one
+version bump and undoes as a single step.
+
+### Marks: remembering a place
+
+A position you computed goes stale the moment the user types above it. A **mark** is a
+position the core keeps current for you:
+
+```
+request  mark.set     { buffer, pos: {line, col}, gravity?: "left" | "right" }  → { mark }
+request  mark.get     { buffer, mark }  → { pos: {line, col}, valid, version }
+request  mark.delete  { buffer, mark }  → { }
+```
+
+Set it once, read it whenever you need the *current* location. `gravity` says what happens
+when text is inserted exactly at the mark: `left` (default) stays put, `right` rides along.
+If the text around a mark is deleted, the mark parks at the deletion point with
+`valid: false` - your cue to re-derive the location rather than trust it.
 
 ### Positions are (line, byte-column)
 
@@ -354,6 +426,21 @@ request  buffer.create  { caps: "editable" | "append", name? }  → { buffer }
 `append` buffers only grow at the end - the right choice for logs and output. A splice into one is
 refused with `spice.core.capability_denied`.
 
+### Highlights: coloring text you don't own
+
+```
+notify  buffer.set_highlights  { buffer, highlights: [{range, fg: 0xRRGGBB}, ...] }
+```
+
+Paints foreground colors over a buffer's text wherever it is shown - the syntax-highlighting
+primitive. The list **replaces** the buffer's whole set. Ranges are byte-addressed; after an
+edit your spans drift until you recompute, so subscribe to `spice.buffer.changed` and resend.
+
+A complete working example lives in this repository:
+[`plugins/cpp-keywords/cpp_keywords.py`](plugins/cpp-keywords/cpp_keywords.py) colors C++
+keywords pink in every `.cpp`/`.hpp` buffer - self-contained Python, msgpack included, ~200
+lines.
+
 ### How a response tells you it failed
 
 **A response carries a `code` key if and only if it failed.** There is no separate success flag:
@@ -372,18 +459,49 @@ else:
 A pane is a view onto a buffer. All of these are notifies - fire-and-forget, no reply:
 
 ```
-notify  pane.open   { kind: "edit" | "grid" | "pty", buffer?, split?: "h" | "v" }
-notify  pane.close  { pane }
-notify  pane.focus  { pane }
-notify  pane.float  { pane }
-notify  pane.dock   { pane }
+notify  pane.open        { kind: "edit" | "grid" | "pty", buffer?, split?: "h" | "v" }
+notify  pane.close       { pane }
+notify  pane.focus       { pane }
+notify  pane.float       { pane }
+notify  pane.dock        { pane }
+notify  pane.set_buffer  { pane, buffer }
+notify  buffer.kill      { buffer }
 ```
 
 `pane.open` without a `buffer` opens a fresh scratch buffer. Without a `split`, the pane opens
 however the session sees fit.
 
 Since `pane.open` is fire-and-forget, **it does not tell you the new pane's id.** Subscribe to
-`spice.pane.focused` if you need to know where things went.
+`spice.pane.opened` (or `spice.pane.focused`) if you need to know where things went.
+
+`pane.set_buffer` repoints a pane at another buffer; the pane's cursor and scroll reset.
+`buffer.kill` drops a buffer from the session - silently refused while any pane still shows
+it (close or repoint the pane first). Success is visible as `spice.buffer.killed`.
+
+## Drawing: GridPanes
+
+A `grid` pane can show **your** cells instead of a buffer. Send an update and it is on
+screen - there is no flush, and Spice coalesces updates within a frame:
+
+```
+notify  grid.update      { pane, rect: {row, col, rows, cols},
+                           chars?: [str], fg?: [u32], bg?: [u32], style?: [u32] }
+notify  grid.clear       { pane }                       # back to buffer content
+notify  grid.set_cursor  { pane, pos: {line, col}, visible? }
+```
+
+- **Dirty rects.** Send only what changed; a blinking cursor is one cell, not 80x24.
+- Each layer is optional and, when present, flat, row-major, exactly `rows x cols` long
+  (anything else is `spice.core.bad_params`). `chars` holds one grapheme cluster per cell;
+  an empty string is the continuation cell of a double-width character.
+- Colors are `0xRRGGBB`. `style` bits: 1 bold, 2 italic, 4 underline, 8 strikethrough,
+  16 reverse, 32 dim, 64 blink (dim and the underline-style bits are accepted but not yet
+  rendered).
+- Coordinates are relative to the pane's **content area**, whose size arrives via
+  `spice.pane.resized`. On a resize the surface starts blank - redraw it then.
+
+Any plugin may draw to any grid pane it knows the id of; a pane-mode plugin gets its own
+(see below). Cell coordinates in `spice.input.mouse` line up with what you drew.
 
 ---
 
@@ -401,6 +519,10 @@ would not start. Namespace the `code` under your own plugin name (`wordcount.no_
 `spice.core.*` codes mean *Spice* failed, and confusing the two sends users to the wrong place.
 Every error, of either sort, carries `code` and a human-readable `message`.
 
+`log` lines below the user's `[log] level` (CONFIG.md, default `info`) skip the log pane;
+when a `[log] file` is configured, every line lands there regardless of level. Your stderr
+still arrives separately, logged at `warn`.
+
 ---
 
 ## Talking to other plugins
@@ -416,11 +538,19 @@ event  lint.diagnostics.ready  { source: 2, payload: { ... } }
 ```
 
 Spice is a dumb broker here: it does not parse, validate, or understand your `payload` - any
-msgpack value survives the trip. Two rules:
+msgpack value survives the trip. Three rules:
 
 - **`spice.` is reserved.** A broadcast on a `spice.` topic is dropped, so a plugin can never forge
   a core event.
 - **You never receive your own broadcast**, even if you subscribe to your own topic.
+- **100 broadcasts per second, per plugin.** Past that, the rest of the second is dropped and
+  logged - a broadcast loop between two plugins throttles instead of melting the session.
+
+What topics exist is discoverable - every ready plugin's declared `publishes`:
+
+```
+request  topics.list  { }  → { topics: [{plugin, prefix}, ...] }
+```
 
 Note the asymmetry: you *publish* with the `broadcast` method, but subscribers *receive* a plain
 event on your topic. There is one topic namespace and one filter for core events and plugin
@@ -529,20 +659,13 @@ start with it.
 
 ## What is not built yet
 
-The protocol describes more than the core currently implements. These are honest gaps - a
-`spice.core.unknown_method` error, or silence, is what you will get:
+The protocol describes more than the core currently implements. The list is short now:
 
-| Not yet                                 | What that means for you                                                                 |
-| --------------------------------------- | --------------------------------------------------------------------------------------- |
-| `buffer.get_text`, `buffer.splice_many` | use `get_lines` and one `splice` at a time                                              |
-| `spice.buffer.changed` for *user* edits | you cannot react to typing; only your own splices are echoed, without detail            |
-| `spice.input.*`, `spice.edit.*` events  | no keystroke or edit stream to subscribe to                                             |
-| `pane.set_buffer`, `buffer.kill`        | accepted and silently ignored - they do nothing                                         |
-| a command's `description`               | accepted, but nothing displays it yet; put what matters in `title`                      |
-| `grid.update` (drawing to a GridPane)   | plugins cannot render custom UI; a plugin's output goes through buffers and status      |
-| `mode = "pane"` semantics               | parsed and passed in `hello`, but a pane plugin is not yet given its own pane or buffer |
-| `restart` policy                        | parsed, but a crashed plugin is not restarted                                           |
-| Marks, command cancellation             | see PROTOCOL.md's "Not in v1"                                                           |
+| Not yet                            | What that means for you                                                          |
+| ---------------------------------- | -------------------------------------------------------------------------------- |
+| `ul_color`, underline-style bits, `dim` | accepted in `grid.update`, but not rendered; the other style bits work      |
+| command progress reporting         | report progress with `status.message`; cancellation exists                       |
+| one pane-plugin instance *per pane* | pane mode means one dedicated pane per plugin, created at startup               |
 
 Each of these is additive: nothing above changes the shape of a message defined in this document.
 A plugin you write today keeps working.

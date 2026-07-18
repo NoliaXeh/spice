@@ -1,0 +1,15 @@
+# Minimal config to try the cpp-keywords highlighter:
+#
+#     ./build/spice --config examples/cpp-keywords.toml examples/demo.cpp
+#
+# (--config points at this file instead of the XDG one, so your real
+# configuration is untouched.)
+
+[[plugin]]
+name    = "cpp-keywords"
+command = ["python3", "plugins/cpp-keywords/cpp_keywords.py"]
+mode    = "global"
+restart = "on-crash"
+
+[log]
+level = "debug"   # watch the plugin come up in the event-log pane

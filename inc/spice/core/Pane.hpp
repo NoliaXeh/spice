@@ -33,6 +33,10 @@ public:
     auto type() const -> PaneType;
     auto buffer() const -> std::shared_ptr<Buffer> const&;
 
+    //! Points the pane at another buffer. View state that belonged to the
+    //! old buffer - cursor, scroll, selection - is reset.
+    auto set_buffer(std::shared_ptr<Buffer> buffer) -> void;
+
     //! Cursor in buffer coordinates, clamped to the buffer on writes
     //! (column may equal the line length: the insertion point at the end).
     auto cursor() const -> Position;
@@ -50,6 +54,12 @@ public:
     //! it - pass `{}` - when the child exits); the cursor comes from the
     //! emulator too.
     auto set_terminal(OptRef<Terminal const> terminal) -> void;
+
+    //! A grid pane shows a plugin-drawn surface instead of its buffer
+    //! while this is set (the session owns the Grid; `{}` detaches). The
+    //! cursor is wherever the plugin parked it, if anywhere.
+    auto set_surface(OptRef<Grid const> surface) -> void;
+    auto set_surface_cursor(std::optional<Position> cursor) -> void;
 
     //! Selection: the range between an anchor and the cursor. Set the
     //! anchor where selecting starts (shift-move, mouse press); it stays
@@ -101,6 +111,8 @@ private:
     auto draw_border(Grid& grid, Rectangle area, bool focused, Theme const& theme) -> void;
     //! The live emulator screen of a PTY pane.
     auto draw_terminal_content(Grid& grid, Rectangle content, Theme const& theme) -> void;
+    //! The plugin-drawn surface of a grid pane.
+    auto draw_surface_content(Grid& grid, Rectangle content, Theme const& theme) -> void;
     //! The buffer's text, with selection and cursor-line highlights.
     auto draw_buffer_content(Grid& grid, Rectangle content, bool focused, Theme const& theme)
         -> void;
@@ -110,6 +122,8 @@ private:
     PaneType _type;
     std::shared_ptr<Buffer> _buffer;
     OptRef<Terminal const> _terminal;
+    OptRef<Grid const> _surface;
+    std::optional<Position> _surface_cursor;
     bool _read_only { false };
     Position _cursor { 0, 0, 0 };
     Position _scroll { 0, 0, 0 };

@@ -109,6 +109,23 @@ auto PluginProcess::running() const -> bool {
     return _running;
 }
 
+auto PluginProcess::exited_cleanly() const -> bool {
+    return !_running && _reaped
+        && WIFEXITED(_wait_status) && WEXITSTATUS(_wait_status) == 0;
+}
+
+auto PluginProcess::reap_child(int options) -> void {
+    if (_pid <= 0 || _reaped) {
+        return;
+    }
+    int status {};
+    if (waitpid(_pid, &status, options) == _pid) {
+        _wait_status = status;
+        _reaped = true;
+        _pid = -1; // never signal this (possibly recycled) pid again
+    }
+}
+
 auto PluginProcess::send(Message const& message) -> void {
     if (!_running) {
         return;
@@ -162,14 +179,12 @@ auto PluginProcess::poll() -> std::vector<Message> {
     drain_fd(_stderr, _errors);
 
     bool alive { drain_fd(_stdout, _incoming) };
-    if (alive && _pid > 0 && waitpid(_pid, nullptr, WNOHANG) == _pid) {
-        _pid = -1; // reaped: never signal this (possibly recycled) pid again
-        alive = false;
+    if (alive) {
+        reap_child(WNOHANG);
+        alive = !_reaped;
     }
     if (!alive) {
-        if (_pid > 0 && waitpid(_pid, nullptr, WNOHANG) == _pid) {
-            _pid = -1;
-        }
+        reap_child(WNOHANG);
         _running = false;
     }
 
@@ -200,8 +215,7 @@ auto PluginProcess::request_stop() -> void {
 auto PluginProcess::terminate() -> void {
     if (_pid > 0) {
         kill(_pid, SIGKILL);
-        waitpid(_pid, nullptr, 0);
-        _pid = -1;
+        reap_child(0); // blocking: SIGKILL cannot be ignored
     }
     auto const close_fd = [](int& fd) {
         if (fd >= 0) {

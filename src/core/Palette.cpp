@@ -327,6 +327,22 @@ auto Palette::draw_list(Grid& grid, Rectangle rect, Theme const& theme) -> void 
                     );
                 }
             }
+            // the description follows the title, dimmed, clipped before
+            // the hint; skipped entirely when there is no room for it
+            uint32_t const used { static_cast<uint32_t>(1 + item.title.size() + 2) };
+            uint32_t const reserved { item.hint.empty() ? 1 : hint_size + 2 };
+            if (!item.description.empty() && used + 4 < content_width - reserved) {
+                std::string_view const detail {
+                    std::string_view(item.description)
+                        .substr(0, content_width - reserved - used)
+                };
+                for (uint32_t i { 0 }; i < detail.size(); ++i) {
+                    paint_cell(
+                        grid, { origin.line, origin.column + used + i, 0 },
+                        detail.substr(i, 1), info, row_background
+                    );
+                }
+            }
         } else {
             paint_row(grid, origin, content_width, "", text, background);
         }

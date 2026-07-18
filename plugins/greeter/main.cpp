@@ -58,43 +58,106 @@ auto request(std::string method, Value params) -> uint64_t {
     return id;
 }
 
+//! A protocol position map for get_text/splice ranges.
+auto position(int64_t line, int64_t col) -> Value {
+    return Value::object({ { "line", Value { line } }, { "col", Value { col } } });
+}
+
+auto send_ready() -> void {
+    notify("ready", Value::object({
+        { "protocol", Value { "0.1" } },
+        { "subscribe", Value { Value::Array {
+            Value { "spice.palette.command_invoked" },
+            Value { "spice.pane.focused" },
+        } } },
+        { "publishes", Value { Value::Array { Value { "greeter." } } } },
+        { "commands", Value { Value::Array {
+            Value::object({
+                { "name", Value { "greet" } },
+                { "title", Value { "Greeter: greet the focused buffer" } },
+            }),
+            Value::object({
+                { "name", Value { "shout" } },
+                { "title", Value { "Greeter: shout into the focused buffer" } },
+            }),
+        } } },
+    }));
+}
+
+//! greet: a status line, a broadcast, and a buffer.info round-trip.
+auto handle_greet(Value const& params) -> uint64_t {
+    notify("status.message", Value::object({
+        { "text", Value { "greeter: hello!" } },
+    }));
+    notify("broadcast", Value::object({
+        { "topic", Value { "greeter.greeted" } },
+        { "payload", Value::object({ { "who", Value { "greeter" } } }) },
+    }));
+    if (!params.contains("buffer")) {
+        return 0;
+    }
+    return request("buffer.info", Value::object({ { "buffer", params["buffer"] } }));
+}
+
+//! shout, step 2: edit the buffer, citing the version the read returned -
+//! the whole versioned-write flow in one splice_many.
+auto shout_splice(uint64_t buffer, Value const& read_response) -> uint64_t {
+    notify("status.message", Value::object({
+        { "text", Value { "greeter: read \"" + read_response["text"].as_string() + "\"" } },
+    }));
+    return request("buffer.splice_many", Value::object({
+        { "buffer", Value { buffer } },
+        { "version", read_response["version"] },
+        { "splices", Value { Value::Array {
+            Value::object({
+                { "range", Value::object({
+                    { "start", position(0, 0) },
+                    { "end", position(0, 0) },
+                }) },
+                { "text", Value { "LOUD " } },
+            }),
+        } } },
+    }));
+}
+
 }
 
 int main() {
-    uint64_t pending_focus { 0 }; // request id of an in-flight buffer read
+    uint64_t pending_focus { 0 };  // request id of an in-flight buffer read
+    uint64_t pending_text { 0 };   // buffer.get_text in flight
+    uint64_t pending_splice { 0 }; // buffer.splice_many in flight
+    uint64_t shout_buffer { 0 };   // the buffer "shout" is working on
 
     while (auto message { read_frame() }) {
         auto const& [kind, id, has_id, method, params] { *message };
+        std::string const command {
+            method == "spice.palette.command_invoked"
+                ? params["command"].as_string() : std::string()
+        };
 
         if (kind == Kind::event && method == "spice.lifecycle.hello") {
-            notify("ready", Value::object({
-                { "protocol", Value { "0.1" } },
-                { "subscribe", Value { Value::Array {
-                    Value { "spice.palette.command_invoked" },
-                    Value { "spice.pane.focused" },
-                } } },
-                { "publishes", Value { Value::Array { Value { "greeter." } } } },
-                { "commands", Value { Value::Array {
-                    Value::object({
-                        { "name", Value { "greet" } },
-                        { "title", Value { "Greeter: greet the focused buffer" } },
-                    }),
-                } } },
+            send_ready();
+        } else if (kind == Kind::event && command == "greet") {
+            pending_focus = handle_greet(params);
+        } else if (kind == Kind::event && command == "shout" && params.contains("buffer")) {
+            // read the whole buffer first; the response drives the edit
+            shout_buffer = static_cast<uint64_t>(params["buffer"].as_int());
+            pending_text = request("buffer.get_text", Value::object({
+                { "buffer", params["buffer"] },
+                { "range", Value::object({
+                    { "start", position(0, 0) },
+                    { "end", position(-1, -1) },
+                }) },
             }));
-        } else if (kind == Kind::event && method == "spice.palette.command_invoked"
-                   && params["command"].as_string() == "greet") {
+        } else if (kind == Kind::response && has_id && id == pending_text) {
+            pending_splice = shout_splice(shout_buffer, params);
+        } else if (kind == Kind::response && has_id && id == pending_splice) {
             notify("status.message", Value::object({
-                { "text", Value { "greeter: hello!" } },
+                { "text", Value { params.contains("code")
+                    ? "greeter: shout failed: " + params["code"].as_string()
+                    : "greeter: shouted, version "
+                        + std::to_string(params["version"].as_int()) } },
             }));
-            notify("broadcast", Value::object({
-                { "topic", Value { "greeter.greeted" } },
-                { "payload", Value::object({ { "who", Value { "greeter" } } }) },
-            }));
-            if (params.contains("buffer")) {
-                pending_focus = request("buffer.info", Value::object({
-                    { "buffer", params["buffer"] },
-                }));
-            }
         } else if (kind == Kind::response && has_id && id == pending_focus) {
             notify("status.message", Value::object({
                 { "text", Value {

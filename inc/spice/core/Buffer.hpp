@@ -86,16 +86,102 @@ public:
     //! Re-applies the last undone edit. Any new edit clears redo history.
     auto redo() -> std::optional<Position>;
 
+    //! One change, protocol-shaped: the bytes [start, end) were replaced
+    //! by `text`. Columns are byte offsets into the line's UTF-8 - how the
+    //! plugin protocol addresses text (PROTOCOL.md) - unlike Position
+    //! columns, which count characters.
+    struct Change {
+        uint32_t start_line { 0 };
+        uint32_t start_byte { 0 };
+        uint32_t end_line { 0 };
+        uint32_t end_byte { 0 };
+        std::string text; //!< what now sits in the range; empty for a pure erase
+
+        auto operator==(Change const&) const -> bool = default;
+    };
+
+    //! The changes since the last call, oldest first, with the version the
+    //! first applied against. `complete` false means the journal overflowed
+    //! and the splices were dropped - a reader must refetch the buffer.
+    struct ChangeSet {
+        uint64_t from_version { 0 };
+        bool complete { true };
+        std::vector<Change> splices;
+    };
+
+    //! Drains the change journal (every mutation source: edits, appends,
+    //! undo/redo). The next call starts from the current version.
+    auto take_changes() -> ChangeSet;
+
+    //! One splice of a batch: [begin, end) replaced by `text` (Positions,
+    //! so character columns). Insert: begin == end. Delete: empty text.
+    struct BatchSplice {
+        Position begin;
+        Position end;
+        std::string text;
+    };
+
+    //! Applies every splice as a single undoable edit with a single
+    //! version bump. Positions must be valid and the splices sorted in
+    //! descending document order (so each cites unchanged text) - callers
+    //! validate against the pre-batch content. Editable buffers only.
+    auto apply_batch(std::vector<BatchSplice> const& splices) -> bool;
+
+    // -- marks: positions that ride along with the text ----------------
+    //! Which side of a mark an insertion exactly at it lands on: with
+    //! `left` gravity the mark stays put, with `right` it follows the
+    //! inserted text.
+    enum class MarkGravity : uint8_t { left, right };
+
+    //! Where a mark is now. Columns are byte offsets, like Change - marks
+    //! belong to the plugin protocol's addressing. An invalid mark had the
+    //! text around it deleted; it sits at the deletion point.
+    struct MarkInfo {
+        uint32_t line { 0 };
+        uint32_t byte { 0 };
+        bool valid { true };
+
+        auto operator==(MarkInfo const&) const -> bool = default;
+    };
+
+    //! Anchors a mark (clamped into the buffer); its id is never reused.
+    auto set_mark(uint32_t line, uint32_t byte, MarkGravity gravity) -> uint64_t;
+    auto mark(uint64_t id) const -> std::optional<MarkInfo>;
+    auto delete_mark(uint64_t id) -> bool;
+
+    // -- highlights: colored spans painted over the text ----------------
+    //! A foreground-colored span, byte-addressed like Change. Highlights
+    //! are decoration: they carry no meaning the core interprets, and the
+    //! next edit may leave them slightly stale until their owner (a
+    //! plugin) recomputes them against the new content.
+    struct Highlight {
+        uint32_t start_line { 0 };
+        uint32_t start_byte { 0 };
+        uint32_t end_line { 0 };
+        uint32_t end_byte { 0 };
+        uint32_t rgb { 0 }; //!< 0xRRGGBB foreground
+
+        auto operator==(Highlight const&) const -> bool = default;
+    };
+
+    //! Replaces the buffer's whole highlight set (there is one set, not
+    //! one per plugin - last writer wins).
+    auto set_highlights(std::vector<Highlight> highlights) -> void;
+    auto highlights() const -> std::vector<Highlight> const&;
+
 private:
     //! One invertible edit: what happened, where, and the text involved.
+    //! A `batch` edit is a compound: its children applied in order.
     struct Edit {
         enum class Kind : uint8_t {
             insert_text, erase_text, split, join,
             insert_block, erase_block, // multi-line text with '\n's
+            batch,                     // children carry the parts
         };
         Kind kind;
         Position position;
         std::string text;
+        std::vector<Edit> children {};
     };
 
     auto raw_insert(Position position, std::string_view text) -> void;
@@ -109,6 +195,20 @@ private:
     auto revert(Edit const& edit) -> Position;
     auto record(Edit&& edit) -> void;
 
+    //! Journals the protocol splice for an edit just applied (`inverted`
+    //! for one just undone). Must run after the mutation.
+    auto journal(Edit const& edit, bool inverted) -> void;
+    //! The primitive: `text` was inserted at `position` - or erased from
+    //! there, when `erased` - with `position` in character columns. Also
+    //! shifts marks, so it runs for every mutation, journal cap or not.
+    auto journal_change(Position position, std::string_view text, bool erased) -> void;
+    //! Applies (or reverts) an edit and journals it right after - child by
+    //! child for a batch, since the journal reads post-mutation content.
+    auto apply_and_journal(Edit const& edit) -> Position;
+    auto revert_and_journal(Edit const& edit) -> Position;
+    //! Moves every mark across a just-applied change (byte coordinates).
+    auto shift_marks(Change const& change) -> void;
+
     std::string _name;
     BufferCapability _capability;
     std::string _path;
@@ -117,6 +217,20 @@ private:
     std::vector<std::string> _lines { std::string() };
     std::vector<Edit> _undo;
     std::vector<Edit> _redo;
+
+    std::vector<Change> _changes; //!< protocol splices since the last take
+    uint64_t _changes_base_version { 0 };
+    bool _changes_complete { true };
+
+    struct MarkSlot {
+        uint64_t id;
+        MarkGravity gravity;
+        MarkInfo at;
+    };
+    std::vector<MarkSlot> _marks;
+    uint64_t _next_mark_id { 1 };
+
+    std::vector<Highlight> _highlights;
 };
 
 }

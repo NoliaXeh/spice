@@ -27,6 +27,11 @@ public:
     //! Still running? Updated by poll() when the child hangs up.
     auto running() const -> bool;
 
+    //! True when the child exited by itself with status 0 - a clean exit,
+    //! as opposed to a crash, a signal, or an unobserved death. False
+    //! while it is still running.
+    auto exited_cleanly() const -> bool;
+
     //! Queues a frame for the plugin (best-effort, non-blocking write).
     auto send(Message const& message) -> void;
 
@@ -46,11 +51,16 @@ private:
     auto drain_fd(int fd, std::string& into) -> bool; //!< false on hangup
     auto flush_output() -> void;
 
+    //! Reaps the child if it has exited, recording its wait status.
+    auto reap_child(int options) -> void;
+
     int _stdin { -1 };  //!< our write end of the plugin's stdin
     int _stdout { -1 }; //!< our read end of the plugin's stdout
     int _stderr { -1 };
     pid_t _pid { -1 };
     bool _running { false };
+    bool _reaped { false };
+    int _wait_status { 0 }; //!< meaningful once _reaped
 
     std::string _incoming; //!< bytes read from stdout, awaiting whole frames
     std::string _outgoing; //!< frames queued but not yet written

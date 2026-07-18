@@ -286,3 +286,179 @@ TEST_CASE("core::Buffer undo round-trips a mixed edit sequence") {
     CHECK_EQ(buffer.line(0), "hell");
     CHECK_EQ(buffer.line(1), "- world");
 }
+
+// ---------------------------------------------------------------
+// The change journal (protocol splices - byte columns)
+// ---------------------------------------------------------------
+
+TEST_CASE("core::Buffer::take_changes() starts empty and drains") {
+    Buffer buffer { "b", BufferCapability::editable, "one\ntwo" };
+    auto const initial { buffer.take_changes() };
+    CHECK(initial.complete);
+    CHECK(initial.splices.empty());
+    CHECK_EQ(initial.from_version, buffer.version()); // creation is the base
+
+    buffer.insert({ 0, 0, 0 }, "X");
+    auto const first { buffer.take_changes() };
+    CHECK_EQ(first.splices.size(), 1u);
+    CHECK(buffer.take_changes().splices.empty()); // drained
+}
+
+TEST_CASE("core::Buffer journal reports inserts with byte columns") {
+    Buffer buffer { "b", BufferCapability::editable, "a\xc3\xa9z" }; // aéz
+    buffer.take_changes();
+
+    buffer.insert({ 0, 2, 0 }, "X"); // after é: char col 2, byte col 3
+    auto const set { buffer.take_changes() };
+    REQUIRE_EQ(set.splices.size(), 1u);
+    CHECK_EQ(set.splices[0], Buffer::Change { 0, 3, 0, 3, "X" });
+}
+
+TEST_CASE("core::Buffer journal reports erases and line joins") {
+    Buffer buffer { "b", BufferCapability::editable, "ab\ncd" };
+    buffer.take_changes();
+
+    buffer.erase({ 0, 0, 0 }); // 'a' goes
+    buffer.erase({ 0, 1, 0 }); // end of "b": joins the lines
+    auto const set { buffer.take_changes() };
+    REQUIRE_EQ(set.splices.size(), 2u);
+    CHECK_EQ(set.splices[0], Buffer::Change { 0, 0, 0, 1, "" });
+    CHECK_EQ(set.splices[1], Buffer::Change { 0, 1, 1, 0, "" }); // the newline
+}
+
+TEST_CASE("core::Buffer journal reports splits, blocks and appends") {
+    Buffer buffer { "b", BufferCapability::editable, "hello world" };
+    buffer.take_changes();
+
+    buffer.split_line({ 0, 5, 0 });
+    auto set { buffer.take_changes() };
+    REQUIRE_EQ(set.splices.size(), 1u);
+    CHECK_EQ(set.splices[0], Buffer::Change { 0, 5, 0, 5, "\n" });
+
+    buffer.erase_range({ 0, 1, 0 }, { 1, 2, 0 }); // "ello\n w" goes
+    set = buffer.take_changes();
+    REQUIRE_EQ(set.splices.size(), 1u);
+    CHECK_EQ(set.splices[0], Buffer::Change { 0, 1, 1, 2, "" });
+
+    buffer.insert_block({ 0, 1, 0 }, "X\nY");
+    set = buffer.take_changes();
+    REQUIRE_EQ(set.splices.size(), 1u);
+    CHECK_EQ(set.splices[0], Buffer::Change { 0, 1, 0, 1, "X\nY" });
+
+    buffer.append("\ntail");
+    set = buffer.take_changes();
+    REQUIRE_EQ(set.splices.size(), 1u);
+    CHECK_EQ(set.splices[0].text, "\ntail");
+}
+
+TEST_CASE("core::Buffer journal reports undo as the inverse splice") {
+    Buffer buffer { "b", BufferCapability::editable, "abc" };
+    buffer.take_changes();
+
+    buffer.insert({ 0, 1, 0 }, "X"); // "aXbc"
+    buffer.take_changes();
+
+    buffer.undo(); // back to "abc": the X was erased
+    auto const undone { buffer.take_changes() };
+    REQUIRE_EQ(undone.splices.size(), 1u);
+    CHECK_EQ(undone.splices[0], Buffer::Change { 0, 1, 0, 2, "" });
+
+    buffer.redo(); // "aXbc" again: the X came back
+    auto const redone { buffer.take_changes() };
+    REQUIRE_EQ(redone.splices.size(), 1u);
+    CHECK_EQ(redone.splices[0], Buffer::Change { 0, 1, 0, 1, "X" });
+}
+
+// ---------------------------------------------------------------
+// Batches: many splices, one edit
+// ---------------------------------------------------------------
+
+TEST_CASE("core::Buffer::apply_batch() is one version bump and one undo step") {
+    Buffer buffer { "b", BufferCapability::editable, "alpha\nbeta\ngamma" };
+    buffer.take_changes();
+    uint64_t const before { buffer.version() };
+
+    // descending document order, both citing the original content
+    CHECK(buffer.apply_batch({
+        { { 2, 0, 0 }, { 2, 5, 0 }, "GAMMA" }, // replace "gamma"
+        { { 0, 0, 0 }, { 0, 0, 0 }, ">> " },   // insert at the top
+    }));
+    CHECK_EQ(buffer.line(0), ">> alpha");
+    CHECK_EQ(buffer.line(2), "GAMMA");
+    CHECK_EQ(buffer.version(), before + 1); // one bump for the whole batch
+
+    auto const set { buffer.take_changes() };
+    CHECK_EQ(set.splices.size(), 3u); // erase + insert + insert
+
+    buffer.undo(); // the whole batch reverts as one
+    CHECK_EQ(buffer.line(0), "alpha");
+    CHECK_EQ(buffer.line(2), "gamma");
+
+    buffer.redo();
+    CHECK_EQ(buffer.line(0), ">> alpha");
+    CHECK_EQ(buffer.line(2), "GAMMA");
+}
+
+// ---------------------------------------------------------------
+// Marks: positions that ride along with the text
+// ---------------------------------------------------------------
+
+TEST_CASE("core::Buffer marks shift with edits around them") {
+    Buffer buffer { "b", BufferCapability::editable, "hello world" };
+    uint64_t const mark { buffer.set_mark(0, 6, Buffer::MarkGravity::left) }; // before "world"
+
+    buffer.insert({ 0, 0, 0 }, "X"); // before the mark: it shifts right
+    CHECK_EQ(buffer.mark(mark), Buffer::MarkInfo { 0, 7, true });
+
+    buffer.insert({ 0, 10, 0 }, "Y"); // after the mark: no effect
+    CHECK_EQ(buffer.mark(mark), Buffer::MarkInfo { 0, 7, true });
+
+    buffer.split_line({ 0, 2, 0 }); // a newline above: the mark changes line
+    CHECK_EQ(buffer.mark(mark), Buffer::MarkInfo { 1, 5, true });
+
+    CHECK(buffer.delete_mark(mark));
+    CHECK_FALSE(buffer.mark(mark).has_value());
+}
+
+TEST_CASE("core::Buffer mark gravity decides on insertion at the mark") {
+    Buffer buffer { "b", BufferCapability::editable, "ab" };
+    uint64_t const stays { buffer.set_mark(0, 1, Buffer::MarkGravity::left) };
+    uint64_t const rides { buffer.set_mark(0, 1, Buffer::MarkGravity::right) };
+
+    buffer.insert({ 0, 1, 0 }, "XY"); // exactly at both marks
+    CHECK_EQ(buffer.mark(stays), Buffer::MarkInfo { 0, 1, true });
+    CHECK_EQ(buffer.mark(rides), Buffer::MarkInfo { 0, 3, true });
+}
+
+TEST_CASE("core::Buffer marks inside deleted text go invalid, loudly") {
+    Buffer buffer { "b", BufferCapability::editable, "hello world" };
+    uint64_t const inside { buffer.set_mark(0, 8, Buffer::MarkGravity::left) };
+    uint64_t const after { buffer.set_mark(0, 11, Buffer::MarkGravity::left) };
+
+    buffer.erase_range({ 0, 5, 0 }, { 0, 10, 0 }); // " worl" goes
+    CHECK_EQ(buffer.mark(inside), Buffer::MarkInfo { 0, 5, false }); // parked, invalid
+    CHECK_EQ(buffer.mark(after), Buffer::MarkInfo { 0, 6, true });   // remapped
+}
+
+TEST_CASE("core::Buffer marks survive undo, moving back with the text") {
+    Buffer buffer { "b", BufferCapability::editable, "abc" };
+    uint64_t const mark { buffer.set_mark(0, 2, Buffer::MarkGravity::left) };
+
+    buffer.insert({ 0, 0, 0 }, "12");
+    CHECK_EQ(buffer.mark(mark), Buffer::MarkInfo { 0, 4, true });
+    buffer.undo();
+    CHECK_EQ(buffer.mark(mark), Buffer::MarkInfo { 0, 2, true });
+}
+
+TEST_CASE("core::Buffer journal versions bracket the changes") {
+    Buffer buffer { "b", BufferCapability::editable, "abc" };
+    buffer.take_changes();
+    uint64_t const before { buffer.version() };
+
+    buffer.insert({ 0, 0, 0 }, "1");
+    buffer.insert({ 0, 1, 0 }, "2");
+    auto const set { buffer.take_changes() };
+    CHECK_EQ(set.from_version, before);
+    CHECK_EQ(buffer.version(), before + 2);
+    CHECK_EQ(set.splices.size(), 2u);
+}

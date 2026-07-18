@@ -10,7 +10,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <format>
+#include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <print>
@@ -208,12 +210,30 @@ public:
     auto buffer_info(uint64_t buffer) -> std::optional<plugin::BufferInfo> override;
     auto buffer_lines(uint64_t buffer, uint64_t start, uint64_t end)
         -> std::optional<std::pair<std::vector<std::string>, uint64_t>> override;
+    auto buffer_text(uint64_t buffer, plugin::BufferRange range)
+        -> std::optional<std::pair<std::string, uint64_t>> override;
     auto create_buffer(bool editable, std::string const& name) -> uint64_t override;
     auto kill_buffer(uint64_t buffer) -> void override;
     auto splice(
         uint64_t buffer, plugin::BufferRange range, std::string const& text,
         uint64_t version, uint64_t& new_version
     ) -> plugin::SpliceStatus override;
+    auto splice_many(
+        uint64_t buffer, std::vector<plugin::Splice> const& splices,
+        uint64_t version, uint64_t& new_version
+    ) -> plugin::SpliceStatus override;
+    auto grid_update(plugin::GridUpdate const& update) -> void override;
+    auto grid_clear(uint64_t pane) -> void override;
+    auto grid_set_cursor(uint64_t pane, uint64_t line, uint64_t col, bool visible)
+        -> void override;
+    auto set_mark(uint64_t buffer, plugin::BufferPosition position, bool right_gravity)
+        -> uint64_t override;
+    auto get_mark(uint64_t buffer, uint64_t mark)
+        -> std::optional<std::pair<plugin::MarkInfo, uint64_t>> override;
+    auto delete_mark(uint64_t buffer, uint64_t mark) -> bool override;
+    auto plugin_pane(std::string const& plugin) -> std::pair<uint64_t, uint64_t> override;
+    auto set_highlights(uint64_t buffer, std::vector<plugin::HighlightSpan> const& spans)
+        -> void override;
 
 private:
     // -- startup ----------------------------------------------------
@@ -232,6 +252,29 @@ private:
     auto buffer_by_id(uint64_t id) -> std::shared_ptr<core::Buffer>;
     //! Emits a core event to subscribed plugins, if the host is running.
     auto emit(std::string topic, plugin::msgpack::Value params) -> void;
+    //! A protocol position (byte column) as a core one (character column),
+    //! clamped into the buffer.
+    auto protocol_position(core::Buffer const& buffer, plugin::BufferPosition position)
+        -> core::Position;
+    //! True when the range addresses real content of `buffer` in order.
+    auto valid_range(core::Buffer const& buffer, plugin::BufferRange range) -> bool;
+    //! Diffs the session against what plugins were last told and emits the
+    //! spice.pane.* / spice.buffer.* events for whatever moved - whoever
+    //! moved it, user or plugin. Runs once per loop iteration.
+    auto emit_session_events() -> void;
+    auto emit_buffer_events() -> void; //!< created / changed / dirty_changed
+    auto emit_pane_events() -> void;   //!< opened / closed / floated / docked / resized
+    //! spice.input.key / spice.input.mouse for one polled event.
+    auto emit_input_event(core::Event const& event) -> void;
+    //! Offers a transient "Cancel: <title>" palette entry for a running
+    //! cancellable command; picking it emits spice.palette.command_cancel.
+    auto add_cancel_entry(std::string const& registry_name, std::string const& title)
+        -> void;
+    //! A plugin log line: filtered by [log] level for the log pane, and
+    //! appended to the configured log file regardless.
+    auto plugin_log(
+        std::string const& plugin, std::string const& level, std::string const& message
+    ) -> void;
 
     // -- pane and buffer helpers ------------------------------------
     //! Where the event log float sits: bottom-right corner of the screen.
@@ -311,12 +354,26 @@ private:
     core::Palette _palette;
     std::unordered_map<std::string, std::function<void(core::Event const&)>> _bindings;
     std::unordered_map<std::string, std::string> _command_keys; //!< command -> its key name
+    std::unordered_map<std::string, std::string> _command_descriptions; //!< palette detail
 
     std::unique_ptr<plugin::PluginHost> _host;
     //! registry command name -> (plugin name, plugin's command name)
     std::unordered_map<std::string, std::pair<std::string, std::string>> _plugin_commands;
     std::vector<std::weak_ptr<core::Buffer>> _plugin_buffers; //!< index = id - 1
     uint32_t _last_focused { 0 }; //!< to emit spice.pane.focused on change
+
+    //! What plugins were last told about a pane, for emit_session_events.
+    struct PaneState {
+        std::string kind;
+        uint64_t buffer { 0 };
+        bool floating { false };
+        uint32_t rows { 0 };
+        uint32_t cols { 0 };
+    };
+    std::map<uint32_t, PaneState> _pane_states;
+    std::map<uint64_t, bool> _buffer_states; //!< announced buffers -> last dirty flag
+    std::ofstream _log_sink; //!< the [log] file, when one is configured
+    std::vector<std::string> _retired_commands; //!< removed after their action returns
 
     bool _running { true };
     uint32_t _scratch_count { 0 };
@@ -358,13 +415,32 @@ App::App(Options const& options)
         log_note("config: " + warning);
     }
 
+    if (!_config.log_file.empty()) {
+        _log_sink.open(_config.log_file, std::ios::app);
+    }
+
     _host = std::make_unique<plugin::PluginHost>(*this);
     start_plugins();
 }
 
 auto App::start_plugins() -> void {
+    auto const policy = [](config::RestartPolicy restart) {
+        switch (restart) {
+        case config::RestartPolicy::never: return plugin::Restart::never;
+        case config::RestartPolicy::on_crash: return plugin::Restart::on_crash;
+        case config::RestartPolicy::always: return plugin::Restart::always;
+        }
+        return plugin::Restart::never;
+    };
     for (auto const& entry : _config.plugins) {
-        _host->start({ entry.name, entry.command, entry.pane_mode });
+        _host->start({
+            entry.name,
+            entry.command,
+            entry.pane_mode,
+            policy(entry.restart),
+            entry.max_restarts,
+            entry.restart_window,
+        });
     }
 }
 
@@ -393,6 +469,207 @@ auto App::emit(std::string topic, plugin::msgpack::Value params) -> void {
     }
 }
 
+namespace {
+
+//! A journal entry as the protocol's {range, text} splice map.
+auto splice_value(core::Buffer::Change const& change) -> plugin::msgpack::Value {
+    using plugin::msgpack::Value;
+    auto const position = [](uint32_t line, uint32_t byte) {
+        return Value::object({
+            { "line", Value { static_cast<uint64_t>(line) } },
+            { "col", Value { static_cast<uint64_t>(byte) } },
+        });
+    };
+    return Value::object({
+        { "range", Value::object({
+            { "start", position(change.start_line, change.start_byte) },
+            { "end", position(change.end_line, change.end_byte) },
+        }) },
+        { "text", Value { change.text } },
+    });
+}
+
+auto pane_kind(core::PaneType type) -> std::string {
+    switch (type) {
+    case core::PaneType::edit: return "edit";
+    case core::PaneType::pty: return "pty";
+    case core::PaneType::grid: return "grid";
+    }
+    return "edit";
+}
+
+//! The protocol's style bitfield as core StyleFlags. Reverse maps to
+//! selected (rendered as reverse video); dim and the underline-style
+//! bits have no core rendering yet and are ignored.
+auto decode_style_bits(uint32_t bits) -> core::StyleFlags {
+    core::StyleFlags style {};
+    style.bold = (bits & 1U) != 0;
+    style.italic = (bits & 2U) != 0;
+    style.underline = (bits & 4U) != 0;
+    style.strikethrough = (bits & 8U) != 0;
+    style.selected = (bits & 16U) != 0; // reverse
+    style.blinking = (bits & 64U) != 0;
+    return style;
+}
+
+}
+
+auto App::emit_session_events() -> void {
+    using plugin::msgpack::Value;
+    emit_buffer_events();
+    emit_pane_events();
+
+    // focus last, so a fresh pane is announced before it gains focus
+    if (_session.focused_id() != _last_focused) {
+        if (_last_focused != 0 && _pane_states.contains(_last_focused)) {
+            emit("spice.pane.unfocused", Value::object({
+                { "pane", Value { static_cast<uint64_t>(_last_focused) } },
+            }));
+        }
+        _last_focused = _session.focused_id();
+        if (_last_focused != 0) {
+            emit("spice.pane.focused", Value::object({
+                { "pane", Value { static_cast<uint64_t>(_last_focused) } },
+            }));
+        }
+    }
+}
+
+auto App::emit_buffer_events() -> void {
+    using plugin::msgpack::Value;
+    for (auto const& buffer : _session.buffers()) {
+        uint64_t const id { buffer_id_for(buffer) };
+        auto const [state, first_sight] { _buffer_states.emplace(id, buffer->dirty()) };
+        if (first_sight) {
+            emit("spice.buffer.created", Value::object({
+                { "buffer", Value { id } },
+                { "caps", Value {
+                    buffer->capability() == core::BufferCapability::editable
+                        ? "editable" : "append" } },
+            }));
+        }
+
+        // content changes come straight from the buffer's journal, so user
+        // typing, plugin splices, undo and pty output all report alike
+        auto changes { buffer->take_changes() };
+        if (changes.from_version != buffer->version()) {
+            Value::Map fields {
+                { "buffer", Value { id } },
+                { "from_version", Value { changes.from_version } },
+                { "to_version", Value { buffer->version() } },
+            };
+            if (changes.complete) { // overflowed journals omit the splices
+                Value::Array splices;
+                splices.reserve(changes.splices.size());
+                for (auto const& change : changes.splices) {
+                    splices.push_back(splice_value(change));
+                }
+                fields.emplace_back("splices", Value { std::move(splices) });
+            }
+            emit("spice.buffer.changed", Value::make_map(std::move(fields)));
+        }
+
+        if (!first_sight && state->second != buffer->dirty()) {
+            emit("spice.buffer.dirty_changed", Value::object({
+                { "buffer", Value { id } },
+                { "dirty", Value { buffer->dirty() } },
+            }));
+        }
+        state->second = buffer->dirty();
+    }
+}
+
+auto App::emit_pane_events() -> void {
+    using plugin::msgpack::Value;
+    auto const pane_field = [](uint32_t id) {
+        return Value::Field { "pane", Value { static_cast<uint64_t>(id) } };
+    };
+
+    std::map<uint32_t, PaneState> current;
+    for (uint32_t const id : _session.pane_ids()) {
+        auto const pane { _session.pane(id) };
+        auto const area { _session.pane_area(id) };
+        auto const content { core::Pane::content_area(area.value_or(Rectangle {})) };
+        PaneState const state {
+            pane_kind(pane->type()),
+            buffer_id_for(pane->buffer()),
+            _session.is_floating(id),
+            content.height,
+            content.width,
+        };
+        current.emplace(id, state);
+
+        auto const known { _pane_states.find(id) };
+        if (known == _pane_states.end()) {
+            emit("spice.pane.opened", Value::make_map({
+                pane_field(id),
+                { "kind", Value { state.kind } },
+                { "buffer", Value { state.buffer } },
+            }));
+            continue;
+        }
+        if (known->second.floating != state.floating) {
+            emit(state.floating ? "spice.pane.floated" : "spice.pane.docked",
+                 Value::make_map({ pane_field(id) }));
+        }
+        if (known->second.rows != state.rows || known->second.cols != state.cols) {
+            emit("spice.pane.resized", Value::make_map({
+                pane_field(id),
+                { "rows", Value { static_cast<uint64_t>(state.rows) } },
+                { "cols", Value { static_cast<uint64_t>(state.cols) } },
+            }));
+        }
+        if (known->second.buffer != state.buffer) {
+            emit("spice.pane.buffer_set", Value::make_map({
+                pane_field(id),
+                { "buffer", Value { state.buffer } },
+            }));
+        }
+    }
+    for (auto const& [id, state] : _pane_states) {
+        if (!current.contains(id)) {
+            emit("spice.pane.closed", Value::make_map({ pane_field(id) }));
+        }
+    }
+    _pane_states = std::move(current);
+}
+
+auto App::emit_input_event(core::Event const& event) -> void {
+    using plugin::msgpack::Value;
+    auto const mods_value = [](core::Modifiers mods) {
+        return Value::object({
+            { "ctrl", Value { mods.ctrl } },
+            { "alt", Value { mods.alt } },
+            { "shift", Value { mods.shift } },
+        });
+    };
+    if (event.type == core::EventType::key) {
+        std::string const id { core::event_id(event) };
+        emit("spice.input.key", Value::object({
+            { "pane", Value { static_cast<uint64_t>(_session.focused_id()) } },
+            { "key", Value { config::key_name(id).value_or(id) } },
+            { "mods", mods_value(event.key.mods) },
+        }));
+    } else if (event.type == core::EventType::mouse) {
+        core::MouseEvent const& mouse { event.mouse };
+        std::string_view const kind {
+            mouse.action == core::MouseAction::press ? "press"
+            : mouse.action == core::MouseAction::release ? "release"
+            : "move"
+        };
+        uint32_t const target {
+            _session.pane_at(mouse.position).value_or(_session.focused_id())
+        };
+        emit("spice.input.mouse", Value::object({
+            { "pane", Value { static_cast<uint64_t>(target) } },
+            { "kind", Value { std::string(kind) } },
+            { "row", Value { static_cast<uint64_t>(mouse.position.line) } },
+            { "col", Value { static_cast<uint64_t>(mouse.position.column) } },
+            { "mods", mods_value(mouse.mods) },
+        }));
+    }
+}
+
 // -- plugin::HostServices --------------------------------------------
 
 auto App::register_commands(
@@ -401,7 +678,9 @@ auto App::register_commands(
     for (auto const& command : commands) {
         std::string const registry_name { plugin + "/" + command.name };
         _plugin_commands[registry_name] = { plugin, command.name };
-        _registry.add({ registry_name, command.title, [this, registry_name] {
+        bool const cancellable { command.cancellable };
+        std::string const title { command.title };
+        _registry.add({ registry_name, command.title, [this, registry_name, cancellable, title] {
             auto const& [plugin_name, command_name] { _plugin_commands.at(registry_name) };
             plugin::msgpack::Value::Map fields {
                 { "plugin", plugin::msgpack::Value { plugin_name } },
@@ -414,9 +693,42 @@ auto App::register_commands(
                     buffer_id_for(pane->buffer()) });
             }
             emit("spice.palette.command_invoked", plugin::msgpack::Value::make_map(fields));
+            if (cancellable) { // now running: offer the way out
+                add_cancel_entry(registry_name, title);
+            }
         } });
+        if (!command.description.empty()) {
+            _command_descriptions[registry_name] = command.description;
+        }
     }
     _full_repaint = true;
+}
+
+auto App::add_cancel_entry(std::string const& registry_name, std::string const& title)
+    -> void {
+    auto const owner { _plugin_commands.find(registry_name) };
+    if (owner == _plugin_commands.end()) {
+        return;
+    }
+    std::string const cancel_name { registry_name + ".cancel" };
+    auto const [plugin_name, command_name] { owner->second };
+    bool const added { _registry.add({
+        cancel_name, "Cancel: " + title,
+        [this, cancel_name, plugin_name, command_name] {
+            emit("spice.palette.command_cancel", plugin::msgpack::Value::object({
+                { "plugin", plugin::msgpack::Value { plugin_name } },
+                { "command", plugin::msgpack::Value { command_name } },
+                { "pane", plugin::msgpack::Value {
+                    static_cast<uint64_t>(_session.focused_id()) } },
+            }));
+            // removed by the loop, not here: a command must not erase
+            // itself out from under its own running action
+            _retired_commands.push_back(cancel_name);
+        },
+    }) };
+    if (added) { // owned by the plugin, so its death withdraws the offer
+        _plugin_commands[cancel_name] = { plugin_name, command_name };
+    }
 }
 
 auto App::unregister_commands(
@@ -425,6 +737,7 @@ auto App::unregister_commands(
     auto remove = [this](std::string const& registry_name) {
         _registry.remove(registry_name);
         _plugin_commands.erase(registry_name);
+        _command_descriptions.erase(registry_name);
         std::erase_if(_command_keys, [&](auto const& kv) { return kv.first == registry_name; });
     };
     if (names.empty()) { // all of the plugin's commands
@@ -453,8 +766,17 @@ auto App::set_keybind(
         return;
     }
     std::string const registry_name { plugin + "/" + command };
-    _bindings[*id] = [this, registry_name](core::Event const&) {
-        run_command(registry_name);
+    _bindings[*id] = [this, registry_name, plugin, command](core::Event const&) {
+        emit("spice.palette.keybind_triggered", plugin::msgpack::Value::object({
+            { "plugin", plugin::msgpack::Value { plugin } },
+            { "command", plugin::msgpack::Value { command } },
+            { "pane", plugin::msgpack::Value {
+                static_cast<uint64_t>(_session.focused_id()) } },
+        }));
+        if (!_registry.run(registry_name)) { // a dead plugin's bind says so
+            log_note(std::format("plugin '{}' is not running", plugin));
+        }
+        _full_repaint = true;
     };
     _command_keys[registry_name] = key;
 }
@@ -472,7 +794,26 @@ auto App::status_error(
 auto App::log(
     std::string const& plugin, std::string const& level, std::string const& message
 ) -> void {
-    log_note(std::format("{} [{}] {}", plugin, level, message));
+    plugin_log(plugin, level, message);
+}
+
+auto App::plugin_log(
+    std::string const& plugin, std::string const& level, std::string const& message
+) -> void {
+    auto const rank = [](std::string const& name) {
+        if (name == "trace") { return config::LogLevel::trace; }
+        if (name == "debug") { return config::LogLevel::debug; }
+        if (name == "warn") { return config::LogLevel::warn; }
+        if (name == "error") { return config::LogLevel::error; }
+        return config::LogLevel::info;
+    };
+    if (rank(level) >= _config.log_level) { // the [log] level filter
+        log_note(std::format("{} [{}] {}", plugin, level, message));
+    }
+    if (_log_sink.is_open()) { // the file gets everything
+        _log_sink << std::format("[{}] {}: {}\n", plugin, level, message);
+        _log_sink.flush();
+    }
 }
 
 auto App::open_pane(
@@ -519,8 +860,9 @@ auto App::dock_pane(uint64_t pane) -> void {
 }
 
 auto App::set_pane_buffer(uint64_t pane, uint64_t buffer) -> void {
-    (void)pane;
-    (void)buffer; // the session has no rebind-pane-to-buffer op yet
+    if (_session.set_pane_buffer(static_cast<uint32_t>(pane), buffer_by_id(buffer))) {
+        _full_repaint = true; // emit_session_events reports the buffer_set
+    }
 }
 
 auto App::buffer_info(uint64_t buffer) -> std::optional<plugin::BufferInfo> {
@@ -561,11 +903,46 @@ auto App::create_buffer(bool editable, std::string const& name) -> uint64_t {
 }
 
 auto App::kill_buffer(uint64_t buffer) -> void {
-    (void)buffer; // buffers are owned by the session for the whole run
+    if (_session.kill_buffer(buffer_by_id(buffer))) { // refused while on screen
+        _buffer_states.erase(buffer);
+        emit("spice.buffer.killed", plugin::msgpack::Value::object({
+            { "buffer", plugin::msgpack::Value { buffer } },
+        }));
+    }
+}
+
+//! The protocol addresses columns as byte offsets; the core in characters.
+auto App::protocol_position(core::Buffer const& buffer, plugin::BufferPosition position)
+    -> core::Position {
+    auto const line_index { static_cast<uint32_t>(
+        std::min<uint64_t>(position.line, buffer.line_count() - 1)) };
+    std::string_view const line { buffer.line(line_index) };
+    uint32_t const column { static_cast<uint32_t>(
+        core::utf8_count(line.substr(0, std::min<size_t>(position.column, line.size())))) };
+    return { line_index, column, 0 };
+}
+
+auto App::valid_range(core::Buffer const& buffer, plugin::BufferRange range) -> bool {
+    auto const valid_position = [&](plugin::BufferPosition p) {
+        return p.line < buffer.line_count()
+            && p.column <= buffer.line(static_cast<uint32_t>(p.line)).size();
+    };
+    bool const ordered {
+        range.start.line < range.end.line
+        || (range.start.line == range.end.line && range.start.column <= range.end.column)
+    };
+    return ordered && valid_position(range.start) && valid_position(range.end);
 }
 
 auto App::splice(
     uint64_t buffer, plugin::BufferRange range, std::string const& text,
+    uint64_t version, uint64_t& new_version
+) -> plugin::SpliceStatus {
+    return splice_many(buffer, { { range, text } }, version, new_version);
+}
+
+auto App::splice_many(
+    uint64_t buffer, std::vector<plugin::Splice> const& splices,
     uint64_t version, uint64_t& new_version
 ) -> plugin::SpliceStatus {
     auto const target { buffer_by_id(buffer) };
@@ -580,28 +957,202 @@ auto App::splice(
         return plugin::SpliceStatus::stale_version;
     }
 
-    // the protocol addresses columns as byte offsets; the core in characters
-    auto to_position = [&](plugin::BufferPosition p) -> core::Position {
-        std::string_view const line { target->line(static_cast<uint32_t>(p.line)) };
-        uint32_t const column { static_cast<uint32_t>(
-            core::utf8_count(line.substr(0, std::min<size_t>(p.column, line.size())))) };
-        return { static_cast<uint32_t>(p.line), column, 0 };
-    };
-    core::Position const begin { to_position(range.start) };
-    core::Position const end { to_position(range.end) };
+    // all positions cite the base version: sort, refuse overlap or anything
+    // out of bounds - the batch must be all-or-none, so validate everything
+    // before touching the buffer
+    std::vector<plugin::Splice const*> ordered;
+    ordered.reserve(splices.size());
+    for (auto const& entry : splices) {
+        if (!valid_range(*target, entry.range)) {
+            return plugin::SpliceStatus::bad_params;
+        }
+        ordered.push_back(&entry);
+    }
+    std::ranges::stable_sort(ordered, [](auto const* a, auto const* b) {
+        return a->range.start.line < b->range.start.line
+            || (a->range.start.line == b->range.start.line
+                && a->range.start.column < b->range.start.column);
+    });
+    for (size_t i { 1 }; i < ordered.size(); ++i) {
+        auto const& previous { ordered[i - 1]->range.end };
+        auto const& next { ordered[i]->range.start };
+        bool const disjoint {
+            previous.line < next.line
+            || (previous.line == next.line && previous.column <= next.column)
+        };
+        if (!disjoint) {
+            return plugin::SpliceStatus::bad_params;
+        }
+    }
 
-    if (!(begin == end)) {
-        target->erase_range(begin, end);
+    // last splice first, so the base-version coordinates of everything
+    // still to apply keep pointing at unchanged text; the whole batch is
+    // one undo step and one version bump
+    std::vector<core::Buffer::BatchSplice> batch;
+    batch.reserve(ordered.size());
+    for (auto it { ordered.rbegin() }; it != ordered.rend(); ++it) {
+        batch.push_back({
+            protocol_position(*target, (*it)->range.start),
+            protocol_position(*target, (*it)->range.end),
+            (*it)->text,
+        });
     }
-    if (!text.empty()) {
-        target->insert_block(begin, text);
-    }
+    target->apply_batch(batch);
     new_version = target->version();
-    emit("spice.buffer.changed", plugin::msgpack::Value::object({
-        { "buffer", plugin::msgpack::Value { buffer } },
-        { "to_version", plugin::msgpack::Value { new_version } },
-    }));
-    return plugin::SpliceStatus::ok;
+    return plugin::SpliceStatus::ok; // emit_session_events reports the change
+}
+
+auto App::buffer_text(uint64_t buffer, plugin::BufferRange range)
+    -> std::optional<std::pair<std::string, uint64_t>> {
+    auto const target { buffer_by_id(buffer) };
+    if (!target) {
+        return std::nullopt;
+    }
+    auto const begin { protocol_position(*target, range.start) };
+    auto const end { protocol_position(*target, range.end) };
+    return std::pair { target->text_between(begin, end), target->version() };
+}
+
+// -- plugin::HostServices: grid panes, marks, pane-mode ----------------
+
+auto App::grid_update(plugin::GridUpdate const& update) -> void {
+    auto const id { static_cast<uint32_t>(update.pane) };
+    auto surface { _session.attach_surface(id) };
+    if (!surface) {
+        return; // unknown pane, or not a grid pane
+    }
+    for (uint32_t row { 0 }; row < update.rows; ++row) {
+        for (uint32_t column { 0 }; column < update.cols; ++column) {
+            size_t const index { static_cast<size_t>(row) * update.cols + column };
+            Position const cell { update.row + row, update.col + column, 0 };
+            if (!update.chars.empty()) {
+                auto const& glyph { update.chars[index] };
+                // an empty cell is a double-width continuation: keep it
+                // blank rather than dropping the write
+                surface->set_text(cell, glyph.empty() ? " " : glyph);
+            }
+            if (!update.fg.empty() || !update.style.empty()) {
+                core::Color color { surface->style_at(cell) };
+                if (!update.fg.empty()) {
+                    uint32_t const value { update.fg[index] };
+                    color.r = static_cast<uint8_t>(value >> 16U);
+                    color.g = static_cast<uint8_t>(value >> 8U);
+                    color.b = static_cast<uint8_t>(value);
+                }
+                if (!update.style.empty()) {
+                    color.style = decode_style_bits(update.style[index]);
+                }
+                surface->set_style(cell, color);
+            }
+            if (!update.bg.empty()) {
+                uint32_t const value { update.bg[index] };
+                surface->set_background(cell, {
+                    static_cast<uint8_t>(value >> 16U),
+                    static_cast<uint8_t>(value >> 8U),
+                    static_cast<uint8_t>(value),
+                    {},
+                });
+            }
+        }
+    }
+    if (auto const area { _session.pane_area(id) }) {
+        _damage.push_back(*area); // coalesced with everything else this frame
+    }
+}
+
+auto App::grid_clear(uint64_t pane) -> void {
+    _session.clear_surface(static_cast<uint32_t>(pane));
+    _full_repaint = true; // back to buffer content: repaint it whole
+}
+
+auto App::grid_set_cursor(uint64_t pane, uint64_t line, uint64_t col, bool visible) -> void {
+    auto const id { static_cast<uint32_t>(pane) };
+    _session.set_surface_cursor(
+        id,
+        { static_cast<uint32_t>(line), static_cast<uint32_t>(col), 0 },
+        visible
+    );
+    if (auto const area { _session.pane_area(id) }) {
+        _damage.push_back(*area);
+    }
+}
+
+auto App::set_mark(uint64_t buffer, plugin::BufferPosition position, bool right_gravity)
+    -> uint64_t {
+    auto const target { buffer_by_id(buffer) };
+    if (!target) {
+        return 0;
+    }
+    return target->set_mark(
+        static_cast<uint32_t>(position.line),
+        static_cast<uint32_t>(position.column),
+        right_gravity ? core::Buffer::MarkGravity::right : core::Buffer::MarkGravity::left
+    );
+}
+
+auto App::get_mark(uint64_t buffer, uint64_t mark)
+    -> std::optional<std::pair<plugin::MarkInfo, uint64_t>> {
+    auto const target { buffer_by_id(buffer) };
+    if (!target) {
+        return std::nullopt;
+    }
+    auto const found { target->mark(mark) };
+    if (!found) {
+        return std::nullopt;
+    }
+    return std::pair {
+        plugin::MarkInfo { found->line, found->byte, found->valid },
+        target->version(),
+    };
+}
+
+auto App::delete_mark(uint64_t buffer, uint64_t mark) -> bool {
+    auto const target { buffer_by_id(buffer) };
+    return target && target->delete_mark(mark);
+}
+
+auto App::set_highlights(uint64_t buffer, std::vector<plugin::HighlightSpan> const& spans)
+    -> void {
+    auto const target { buffer_by_id(buffer) };
+    if (!target) {
+        return;
+    }
+    std::vector<core::Buffer::Highlight> highlights;
+    highlights.reserve(spans.size());
+    for (auto const& span : spans) {
+        highlights.push_back({
+            static_cast<uint32_t>(span.range.start.line),
+            static_cast<uint32_t>(span.range.start.column),
+            static_cast<uint32_t>(span.range.end.line),
+            static_cast<uint32_t>(span.range.end.column),
+            span.fg,
+        });
+    }
+    target->set_highlights(std::move(highlights));
+
+    // repaint wherever the buffer is on screen
+    for (uint32_t const id : _session.pane_ids()) {
+        if (_session.pane(id)->buffer() == target) {
+            if (auto const area { _session.pane_area(id) }) {
+                _damage.push_back(*area);
+            }
+        }
+    }
+}
+
+auto App::plugin_pane(std::string const& plugin) -> std::pair<uint64_t, uint64_t> {
+    uint32_t const previous { _session.focused_id() };
+    auto buffer { _session.create_buffer(
+        std::string(plugin), core::BufferCapability::append_only
+    ) };
+    uint64_t const buffer_id { buffer_id_for(buffer) };
+    uint32_t const pane { _session.open_pane(core::PaneType::grid, std::move(buffer)) };
+    _session.pane(pane)->set_read_only(true);
+    if (previous != 0) { // a plugin's pane appears; focus stays put
+        _session.focus(previous);
+    }
+    _full_repaint = true;
+    return { pane, buffer_id };
 }
 
 auto App::ready() const -> bool {
@@ -958,13 +1509,13 @@ auto App::file_picker_items(std::string const& query) -> std::vector<core::Palet
     std::vector<core::Palette::Item> items;
     if (!query.empty() && query.front() == ' ') { // leading space: fuzzy find
         for (auto& path : core::fuzzy_find_files(query.substr(1), 50)) {
-            items.push_back({ path, path, {} });
+            items.push_back({ path, path, {}, {} });
         }
         return items;
     }
     for (auto const& entry : core::complete_path(query)) {
         std::string const path { entry.directory ? entry.path + "/" : entry.path };
-        items.push_back({ path, path, {} });
+        items.push_back({ path, path, {}, {} });
     }
     return items;
 }
@@ -1213,10 +1764,12 @@ auto App::open_palette() -> void {
     items.reserve(_registry.commands().size());
     for (auto const& command : _registry.commands()) {
         auto const key { _command_keys.find(command.name) };
+        auto const detail { _command_descriptions.find(command.name) };
         items.push_back({
             command.name,
             command.title,
             key != _command_keys.end() ? key->second : std::string(),
+            detail != _command_descriptions.end() ? detail->second : std::string(),
         });
     }
     _palette.open(std::move(items));
@@ -1260,6 +1813,7 @@ auto App::handle(core::Event const& event) -> void {
     if (!motion) {
         log_note(core::describe(event));
     }
+    emit_input_event(event); // spice.input.*, for subscribed plugins
 
     if (event.type == core::EventType::resize) {
         on_resize();
@@ -1362,14 +1916,26 @@ auto App::run() -> void {
             }
         }
 
-        // let plugins observe a focus change (informational, per PROTOCOL.md)
-        if (_session.focused_id() != _last_focused) {
-            _last_focused = _session.focused_id();
-            emit("spice.pane.focused", plugin::msgpack::Value::object({
-                { "pane", plugin::msgpack::Value {
-                    static_cast<uint64_t>(_last_focused) } },
-            }));
+        // used one-shot commands (a Cancel entry) retire once their action
+        // has fully returned
+        for (auto const& name : _retired_commands) {
+            _registry.remove(name);
+            _plugin_commands.erase(name);
         }
+        _retired_commands.clear();
+
+        // a plugin that just completed its handshake missed the earlier
+        // announcements: forget what was told and re-announce the world
+        // (duplicates are fine - created/opened events are upserts)
+        if (_host->take_newly_ready()) {
+            _pane_states.clear();
+            _buffer_states.clear();
+            _last_focused = 0;
+        }
+
+        // let plugins observe whatever this iteration changed - panes,
+        // buffers, focus - whoever changed it (informational, PROTOCOL.md)
+        emit_session_events();
 
         if (_damage.size() > 8) {
             _full_repaint = true; // one frame beats re-rendering many rects
