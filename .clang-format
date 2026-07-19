@@ -1,0 +1,35 @@
+# Matches the codebase's hand style: 4-space indent, attached braces,
+# east const, brace initialization with inner spaces, ~95 columns.
+---
+Language: Cpp
+Standard: c++20
+
+ColumnLimit: 95
+IndentWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+
+BreakBeforeBraces: Attach
+AlwaysBreakTemplateDeclarations: Yes
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+
+QualifierAlignment: Right          # T const&, not const T&
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+Cpp11BracedListStyle: false        # { 1, 2 } with breathing space
+SpaceBeforeCpp11BracedList: true
+
+BinPackArguments: false
+BinPackParameters: false
+AlignAfterOpenBracket: BlockIndent
+PenaltyReturnTypeOnItsOwnLine: 1000
+
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
+
+BreakConstructorInitializers: BeforeComma
+PackConstructorInitializers: Never

@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake -S . -B build
+      - name: build
+        run: cmake --build build -j"$(nproc)"
+      - name: test
+        run: ctest --test-dir build --output-on-failure
+
+  sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake -S . -B build -DSPICE_SANITIZE=ON
+      - name: build
+        run: cmake --build build -j"$(nproc)"
+      - name: test
+        run: ctest --test-dir build --output-on-failure
