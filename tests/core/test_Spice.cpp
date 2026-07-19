@@ -137,7 +137,7 @@ TEST_CASE("core::Spice highlights color a buffer's text where shown") {
     auto buffer { session.create_buffer("demo.cpp", core::BufferCapability::editable,
                                         "int x;") };
     uint32_t const id { session.open_pane(core::PaneType::edit, buffer) };
-    buffer->set_highlights({ { 0, 0, 0, 3, 0xFF69B4 } }); // "int", in pink
+    buffer->set_highlights(0, { { 0, 0, 0, 3, 0xFF69B4 } }); // "int", in pink
 
     core::Grid screen { 80, 24 };
     core::Theme theme;
@@ -157,6 +157,32 @@ TEST_CASE("core::Spice highlights color a buffer's text where shown") {
         screen.style_at({ first_cell.line, first_cell.column + 3, 0 })
     };
     CHECK_NE(plain.g, 0x69);
+}
+
+TEST_CASE("core::Spice highlight layers stack: higher wins, lower fills gaps") {
+    auto session { make_session() };
+    auto buffer { session.create_buffer("demo.cpp", core::BufferCapability::editable,
+                                        "int add();") };
+    uint32_t const id { session.open_pane(core::PaneType::edit, buffer) };
+    buffer->set_highlights(0, { { 0, 0, 0, 3, 0x111111 } });  // low: "int"
+    buffer->set_highlights(1, { { 0, 2, 0, 7, 0x222222 } });  // top: "t add"
+
+    core::Grid screen { 80, 24 };
+    core::Theme theme;
+    session.draw(screen, theme);
+
+    auto const content { core::Pane::content_area(*session.pane_area(id)) };
+    auto const color_at = [&](uint32_t column) { // past the 2-column gutter
+        return screen.style_at({ content.position.line,
+                                 content.position.column + 2 + column, 0 }).r;
+    };
+    CHECK_EQ(color_at(0), 0x11); // only the lower layer covers "in"
+    CHECK_EQ(color_at(2), 0x22); // both cover "t": the top layer wins
+    CHECK_EQ(color_at(4), 0x22); // only the top covers "dd()"
+
+    buffer->set_highlights(1, {}); // dropping the top reveals the lower
+    session.draw(screen, theme);
+    CHECK_EQ(color_at(2), 0x11);
 }
 
 TEST_CASE("core::Spice surfaces: only grid panes accept one") {

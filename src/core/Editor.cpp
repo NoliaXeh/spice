@@ -4,9 +4,6 @@ namespace {
 
 using namespace spice::core;
 
-//! Spaces per TAB press, and per SHIFT-TAB dedent.
-constexpr uint32_t indent_width { 4 };
-
 //! The line's leading spaces, capped at `limit`.
 auto leading_spaces(Buffer const& buffer, uint32_t line, uint32_t limit) -> uint32_t {
     std::string_view const text { buffer.line(line) };
@@ -20,7 +17,7 @@ auto leading_spaces(Buffer const& buffer, uint32_t line, uint32_t limit) -> uint
 //! TAB and SHIFT-TAB: indentation. A bare TAB inserts spaces at the
 //! cursor; with a selection it indents every line the selection touches.
 //! SHIFT-TAB removes up to one indent of leading spaces from those lines.
-auto apply_tab_key(Pane& pane, Buffer& buffer, bool dedent) -> bool {
+auto apply_tab_key(Pane& pane, Buffer& buffer, bool dedent, uint32_t indent_width) -> bool {
     Position const cursor { pane.cursor() };
     auto const range { pane.selection() };
     if (!dedent && !range) {
@@ -166,7 +163,8 @@ auto apply_backspace(Pane& pane, Buffer& buffer) -> bool {
 //! Applies a buffer-mutating key (typing, enter, backspace, delete);
 //! false when nothing changed or `key` is not one of them.
 auto apply_mutation_key(
-    Pane& pane, Buffer& buffer, KeyEvent const& key, std::string& clipboard
+    Pane& pane, Buffer& buffer, KeyEvent const& key, std::string& clipboard,
+    uint32_t indent_width
 ) -> bool {
     switch (key.key) {
     case Key::character: {
@@ -199,7 +197,7 @@ auto apply_mutation_key(
     }
 
     case Key::tab:
-        return apply_tab_key(pane, buffer, key.mods.shift);
+        return apply_tab_key(pane, buffer, key.mods.shift, indent_width);
 
     case Key::backspace:
         return erase_selection(pane, buffer) || apply_backspace(pane, buffer);
@@ -222,7 +220,8 @@ auto apply_mutation_key(
 namespace spice::core {
 
 auto apply_editing_key(
-    Pane& pane, KeyEvent const& key, uint32_t page_rows, std::string& clipboard
+    Pane& pane, KeyEvent const& key, uint32_t page_rows, std::string& clipboard,
+    uint32_t indent_width
 ) -> bool {
     auto& buffer { *pane.buffer() };
 
@@ -259,7 +258,7 @@ auto apply_editing_key(
         pane.clear_anchor();
         return true;
     }
-    return apply_mutation_key(pane, buffer, key, clipboard);
+    return apply_mutation_key(pane, buffer, key, clipboard, indent_width);
 }
 
 }

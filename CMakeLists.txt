@@ -13,6 +13,12 @@ endif()
 
 add_compile_options(-Wall -Wextra -O3)
 
+option(SPICE_SANITIZE "Build with Address and UndefinedBehavior sanitizers" OFF)
+if(SPICE_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 enable_testing()
 
 # Each module under src/ builds to its own static library, with headers in
@@ -26,3 +32,14 @@ target_link_libraries(spice PRIVATE core config plugin)
 
 add_subdirectory(plugins/greeter)
 target_compile_definitions(spice PRIVATE SPICE_VERSION="${PROJECT_VERSION}")
+
+# `cmake --install`: the binary, the reference plugins and the docs
+install(TARGETS spice RUNTIME DESTINATION bin)
+install(PROGRAMS
+    plugins/cpp-keywords/cpp_keywords.py
+    plugins/lsp-highlight/lsp_highlight.py
+    DESTINATION share/spice/plugins
+)
+install(FILES README.md CONFIG.md PLUGIN.md PROTOCOL.md
+    DESTINATION share/doc/spice
+)

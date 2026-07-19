@@ -69,6 +69,9 @@ key     = "f5"
 plugin  = "files"
 command = "open"
 
+[editor]
+indent = 2
+
 [lifecycle]
 shutdown_grace = "3s"
 sigterm_grace  = "250ms"
@@ -79,6 +82,7 @@ file  = "/tmp/spice-test.log"
 )") };
     auto const config { load(path, files.path("none.toml")) };
     CHECK_EQ(config.master, "ctrl-g");
+    CHECK_EQ(config.indent, 2u);
     CHECK_EQ(config.palette_bind, "ctrl-b");
     REQUIRE_EQ(config.user_keybinds.size(), 2u);
     CHECK_EQ(config.user_keybinds[0], Keybind { "ctrl-t", "pane.split_horizontal" });
@@ -88,6 +92,14 @@ file  = "/tmp/spice-test.log"
     CHECK_EQ(config.log_level, LogLevel::debug);
     CHECK_EQ(config.log_file, "/tmp/spice-test.log");
     CHECK(config.warnings.empty());
+}
+
+TEST_CASE("config::load() refuses an unreasonable indent, with a warning") {
+    TempConfigs files;
+    auto const path { files.write("config.toml", "[editor]\nindent = 40\n") };
+    auto const config { load(path, files.path("none.toml")) };
+    CHECK_EQ(config.indent, 4u); // the default stands
+    REQUIRE_EQ(config.warnings.size(), 1u);
 }
 
 TEST_CASE("config::load() reads plugin entries") {

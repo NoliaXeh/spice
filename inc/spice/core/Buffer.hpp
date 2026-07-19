@@ -4,6 +4,7 @@
 #include "spice/core/Position.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -64,6 +65,12 @@ public:
     //! The text in [begin, end), lines joined with '\n' (empty if the
     //! range is empty or out of bounds). Order of begin/end is normalized.
     auto text_between(Position begin, Position end) const -> std::string;
+
+    //! The next occurrence of `query` at or after `from`, wrapping past
+    //! the end of the buffer: the match as [begin, end) in character
+    //! columns, or nothing. Queries never match across lines.
+    auto find(std::string_view query, Position from) const
+        -> std::optional<std::pair<Position, Position>>;
 
     //! Erases [begin, end) as a single undoable edit (multi-line ranges
     //! included). Editable buffers only.
@@ -164,10 +171,14 @@ public:
         auto operator==(Highlight const&) const -> bool = default;
     };
 
-    //! Replaces the buffer's whole highlight set (there is one set, not
-    //! one per plugin - last writer wins).
-    auto set_highlights(std::vector<Highlight> highlights) -> void;
-    auto highlights() const -> std::vector<Highlight> const&;
+    //! Replaces one layer's spans. Layers stack: where they overlap, the
+    //! higher `layer` paints on top (the application orders plugin layers
+    //! by their config declaration, so later `[[plugin]]` entries win
+    //! overlaps and earlier ones show through the gaps). An empty set
+    //! drops the layer.
+    auto set_highlights(uint64_t layer, std::vector<Highlight> highlights) -> void;
+    //! The layers, bottom to top.
+    auto highlights() const -> std::map<uint64_t, std::vector<Highlight>> const&;
 
 private:
     //! One invertible edit: what happened, where, and the text involved.
@@ -230,7 +241,7 @@ private:
     std::vector<MarkSlot> _marks;
     uint64_t _next_mark_id { 1 };
 
-    std::vector<Highlight> _highlights;
+    std::map<uint64_t, std::vector<Highlight>> _highlights; //!< layer -> spans
 };
 
 }

@@ -149,6 +149,7 @@ constexpr auto default_bindings { std::to_array<std::pair<std::string_view, std:
     { "alt-left", "pane.shrink_horizontal" },
     { "alt-down", "pane.grow_vertical" },
     { "alt-up", "pane.shrink_vertical" },
+    { "f3", "edit.find_next" }, // config.toml can rebind it away
 }) };
 
 //! An in-progress mouse drag. Grabbed by the border, a pane moves: floats
@@ -233,8 +234,13 @@ public:
         -> std::optional<std::pair<plugin::MarkInfo, uint64_t>> override;
     auto delete_mark(uint64_t buffer, uint64_t mark) -> bool override;
     auto plugin_pane(std::string const& plugin) -> std::pair<uint64_t, uint64_t> override;
-    auto set_highlights(uint64_t buffer, std::vector<plugin::HighlightSpan> const& spans)
-        -> void override;
+    auto set_highlights(
+        std::string const& plugin, uint64_t buffer,
+        std::vector<plugin::HighlightSpan> const& spans
+    ) -> void override;
+    //! A plugin's highlight layer: its `[[plugin]]` declaration rank, so
+    //! later config entries paint over earlier ones.
+    auto highlight_layer(std::string const& plugin) -> uint64_t;
 
 private:
     // -- startup ----------------------------------------------------
@@ -304,6 +310,9 @@ private:
     //! Opens the "Open file" picker: path completion by default, fuzzy
     //! finding when the query starts with a space.
     auto open_file_picker() -> void;
+    //! A picker over every session buffer; picking repoints the focused
+    //! pane (background buffers come back on screen this way).
+    auto open_buffer_switcher() -> void;
     //! The picker's item source for one query.
     auto file_picker_items(std::string const& query) -> std::vector<core::Palette::Item>;
     //! Loads (or starts) `path` in a new edit pane.
@@ -324,6 +333,12 @@ private:
     auto on_palette_picked() -> void;
     //! A left press: focus, then border drag / cursor + selection arm.
     auto on_click(core::Event const& event) -> void;
+    //! A wheel notch: scrolls the pane under the pointer.
+    auto on_wheel(core::MouseEvent const& mouse) -> void;
+    //! Quits - unless unsaved buffers exist, which warns once first.
+    auto request_quit() -> void;
+    //! Selects the next match of the last search, wrapping.
+    auto find_next() -> void;
     //! Pointer moved or released while dragging.
     auto on_drag(core::MouseEvent const& mouse) -> void;
     //! An unbound key: forwarded to a pty pane, or applied as editing.
@@ -377,8 +392,10 @@ private:
     std::vector<std::string> _retired_commands; //!< removed after their action returns
 
     bool _running { true };
+    bool _quit_armed { false }; //!< the unsaved-changes warning was shown
     uint32_t _scratch_count { 0 };
     std::string _clipboard;
+    std::string _search_query; //!< the last edit.find input
     std::function<void(std::string const&)> _prompt_action;
     std::function<void(std::string const&)> _picker_action; //!< gets the picked path
     Drag _drag;
@@ -1112,8 +1129,19 @@ auto App::delete_mark(uint64_t buffer, uint64_t mark) -> bool {
     return target && target->delete_mark(mark);
 }
 
-auto App::set_highlights(uint64_t buffer, std::vector<plugin::HighlightSpan> const& spans)
-    -> void {
+auto App::highlight_layer(std::string const& plugin) -> uint64_t {
+    for (size_t i { 0 }; i < _config.plugins.size(); ++i) {
+        if (_config.plugins[i].name == plugin) {
+            return i;
+        }
+    }
+    return _config.plugins.size(); // unknown senders float above the config
+}
+
+auto App::set_highlights(
+    std::string const& plugin, uint64_t buffer,
+    std::vector<plugin::HighlightSpan> const& spans
+) -> void {
     auto const target { buffer_by_id(buffer) };
     if (!target) {
         return;
@@ -1129,7 +1157,7 @@ auto App::set_highlights(uint64_t buffer, std::vector<plugin::HighlightSpan> con
             span.fg,
         });
     }
-    target->set_highlights(std::move(highlights));
+    target->set_highlights(highlight_layer(plugin), std::move(highlights));
 
     // repaint wherever the buffer is on screen
     for (uint32_t const id : _session.pane_ids()) {
@@ -1201,7 +1229,7 @@ auto App::register_session_commands() -> void {
     _registry.add({ "palette.open", "Open the command palette", [this] {
         open_palette();
     } });
-    _registry.add({ "session.close", "Close Spice", [this] { _running = false; } });
+    _registry.add({ "session.close", "Close Spice", [this] { request_quit(); } });
     _registry.add({ "session.welcome", "Open Welcome Pane", [this] {
         _session.open_welcome_pane();
     } });
@@ -1245,8 +1273,11 @@ auto App::register_pane_commands() -> void {
     _registry.add({ "pane.close", "Close current pane", [this] {
         _session.close_focused_pane();
         if (_session.pane_count() == 0) {
-            _running = false; // all panes closed: the program ends
+            request_quit(); // all panes closed: the program ends
         }
+    } });
+    _registry.add({ "buffer.switch", "Switch buffer", [this] {
+        open_buffer_switcher();
     } });
     _registry.add({ "pane.focus_left", "Move focus left", [this] {
         _session.move_focus(core::Direction::left);
@@ -1361,6 +1392,16 @@ auto App::register_edit_commands() -> void {
             });
         }
     } });
+    _registry.add({ "edit.find", "Find in buffer", [this] {
+        open_prompt("Find", [this](std::string const& query) {
+            if (query.empty()) {
+                return;
+            }
+            _search_query = query;
+            find_next();
+        });
+    } });
+    _registry.add({ "edit.find_next", "Find next match", [this] { find_next(); } });
     _registry.add({ "edit.goto_line", "Go to line", [this] {
         open_prompt("Go to line", [this](std::string const& input) {
             uint32_t line { 0 };
@@ -1532,6 +1573,38 @@ auto App::open_file_picker() -> void {
     _damage.push_back(core::Palette::area(_screen));
 }
 
+auto App::open_buffer_switcher() -> void {
+    if (auto const pane { _session.focused_pane() };
+        !pane || pane->type() == core::PaneType::pty) {
+        return; // a live terminal keeps its pane
+    }
+    _picker_action = [this](std::string const& value) {
+        uint32_t index { 0 };
+        auto const* const end { value.data() + value.size() };
+        if (std::from_chars(value.data(), end, index).ec != std::errc {}
+            || index >= _session.buffers().size()) {
+            return; // typed text, not a pick: nothing to switch to
+        }
+        _session.set_pane_buffer(_session.focused_id(), _session.buffers()[index]);
+    };
+    _palette.open_picker("Switch buffer", [this](std::string const& query) {
+        std::vector<core::Palette::Item> items;
+        auto const& buffers { _session.buffers() };
+        for (size_t i { 0 }; i < buffers.size(); ++i) {
+            std::string title { buffers[i]->name() };
+            if (buffers[i]->dirty()
+                && buffers[i]->capability() == core::BufferCapability::editable) {
+                title += " *";
+            }
+            if (query.empty() || title.find(query) != std::string::npos) {
+                items.push_back({ std::to_string(i), title, {}, {} });
+            }
+        }
+        return items;
+    });
+    _damage.push_back(core::Palette::area(_screen));
+}
+
 auto App::file_picker_items(std::string const& query) -> std::vector<core::Palette::Item> {
     std::vector<core::Palette::Item> items;
     if (!query.empty() && query.front() == ' ') { // leading space: fuzzy find
@@ -1565,6 +1638,7 @@ auto App::save_focused_to(std::string const& path) -> void {
     buffer.set_path(path);
     if (core::write_file(path, buffer)) {
         buffer.mark_saved();
+        _quit_armed = false; // saving resets the discard warning
     }
 }
 
@@ -1723,6 +1797,53 @@ auto App::on_click(core::Event const& event) -> void {
     mark_focused(); // new focus border + cursor
 }
 
+auto App::on_wheel(core::MouseEvent const& mouse) -> void {
+    auto const id { _session.pane_at(mouse.position) };
+    if (!id) {
+        return;
+    }
+    if (auto const pane { _session.pane(*id) }) {
+        int const notch { mouse.button == core::MouseButton::wheel_up ? -3 : 3 };
+        pane->scroll_by(notch);
+        if (auto const area { _session.pane_area(*id) }) {
+            _damage.push_back(*area);
+        }
+    }
+}
+
+auto App::request_quit() -> void {
+    std::string dirty;
+    for (auto const& buffer : _session.buffers()) {
+        if (buffer->dirty()
+            && buffer->capability() == core::BufferCapability::editable) {
+            dirty += (dirty.empty() ? "" : ", ") + buffer->name();
+        }
+    }
+    if (dirty.empty() || _quit_armed) {
+        _running = false;
+        return;
+    }
+    _quit_armed = true; // saving disarms it again
+    log_note("unsaved changes in: " + dirty + " - quit again to discard them");
+}
+
+auto App::find_next() -> void {
+    auto const pane { _session.focused_pane() };
+    if (!pane || _search_query.empty()) {
+        return;
+    }
+    // the cursor sits at the end of a selected match, so searching from it
+    // walks the matches one by one
+    auto const match { pane->buffer()->find(_search_query, pane->cursor()) };
+    if (!match) {
+        log_note("not found: " + _search_query);
+        return;
+    }
+    pane->set_cursor(match->first); // selects the match: it stays visible
+    pane->set_anchor(match->first);
+    pane->set_cursor(match->second);
+}
+
 auto App::on_drag(core::MouseEvent const& mouse) -> void {
     if (mouse.action == core::MouseAction::move) {
         if (_drag.kind == Drag::Kind::resize) {
@@ -1825,7 +1946,7 @@ auto App::on_unbound_key(core::KeyEvent const& key) -> void {
         uint32_t const height { core::Pane::content_area(*area).height };
         page = height > 0 ? height : 1;
     }
-    if (core::apply_editing_key(*pane, key, page, _clipboard)) {
+    if (core::apply_editing_key(*pane, key, page, _clipboard, _config.indent)) {
         mark_focused();
     }
 }
@@ -1842,8 +1963,17 @@ auto App::handle(core::Event const& event) -> void {
     }
     emit_input_event(event); // spice.input.*, for subscribed plugins
 
+    bool const wheel {
+        event.type == core::EventType::mouse
+        && event.mouse.action == core::MouseAction::press
+        && (event.mouse.button == core::MouseButton::wheel_up
+            || event.mouse.button == core::MouseButton::wheel_down)
+    };
+
     if (event.type == core::EventType::resize) {
         on_resize();
+    } else if (wheel && !_palette.is_open()) {
+        on_wheel(event.mouse);
     } else if (!_pending_bind.empty() && event.type == core::EventType::key) {
         finish_bind(event); // the next key belongs to the palette's bind flow
     } else if (_palette.is_open()) {

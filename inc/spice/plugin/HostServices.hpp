@@ -175,10 +175,13 @@ public:
         (void)plugin; return { 0, 0 };
     }
 
-    //! Replaces a buffer's decoration: colored spans painted over its
-    //! text wherever it is shown. Unknown buffers are ignored.
-    virtual auto set_highlights(uint64_t buffer, std::vector<HighlightSpan> const& spans)
-        -> void { (void)buffer; (void)spans; }
+    //! Replaces `plugin`'s decoration layer on a buffer: colored spans
+    //! painted over its text wherever it is shown. Each plugin owns one
+    //! layer per buffer; layers stack in config declaration order, later
+    //! plugins painting over earlier ones. Unknown buffers are ignored.
+    virtual auto set_highlights(
+        std::string const& plugin, uint64_t buffer, std::vector<HighlightSpan> const& spans
+    ) -> void { (void)plugin; (void)buffer; (void)spans; }
 };
 
 }

@@ -1,0 +1,14 @@
+# Semantic highlighting from clangd (or any LSP server - swap the argv):
+#
+#     ./build/spice --config examples/lsp-highlight.toml examples/demo.cpp
+#
+# The colors are the compiler's understanding: functions blue, types teal,
+# macros purple... For rust-analyzer, point the command at a .rs file's
+# server instead: ["python3", "plugins/lsp-highlight/lsp_highlight.py",
+# "rust-analyzer"].
+
+[[plugin]]
+name    = "lsp-highlight"
+command = ["python3", "plugins/lsp-highlight/lsp_highlight.py", "clangd"]
+mode    = "global"
+restart = "on-crash"

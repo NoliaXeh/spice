@@ -242,6 +242,31 @@ auto Buffer::text_between(Position begin, Position end) const -> std::string {
     return out;
 }
 
+auto Buffer::find(std::string_view query, Position from) const
+    -> std::optional<std::pair<Position, Position>> {
+    if (query.empty()) {
+        return std::nullopt;
+    }
+    uint32_t const lines { line_count() };
+    for (uint32_t step { 0 }; step <= lines; ++step) { // once more: the wrap
+        uint32_t const index { (from.line + step) % lines };
+        std::string_view const text { line(index) };
+        size_t const start { step == 0
+            ? utf8_offset(text, std::min(from.column, line_length(index))) : 0 };
+        size_t const at { text.find(query, start) };
+        if (at == std::string_view::npos) {
+            continue;
+        }
+        auto const begin { static_cast<uint32_t>(utf8_count(text.substr(0, at))) };
+        auto const width { static_cast<uint32_t>(utf8_count(query)) };
+        return std::pair {
+            Position { index, begin, 0 },
+            Position { index, begin + width, 0 },
+        };
+    }
+    return std::nullopt;
+}
+
 auto Buffer::erase_range(Position begin, Position end) -> bool {
     if (document_order(end, begin)) {
         std::swap(begin, end);
@@ -464,11 +489,15 @@ auto Buffer::delete_mark(uint64_t id) -> bool {
 
 // -- highlights ---------------------------------------------------------
 
-auto Buffer::set_highlights(std::vector<Highlight> highlights) -> void {
-    _highlights = std::move(highlights);
+auto Buffer::set_highlights(uint64_t layer, std::vector<Highlight> highlights) -> void {
+    if (highlights.empty()) {
+        _highlights.erase(layer);
+    } else {
+        _highlights[layer] = std::move(highlights);
+    }
 }
 
-auto Buffer::highlights() const -> std::vector<Highlight> const& {
+auto Buffer::highlights() const -> std::map<uint64_t, std::vector<Highlight>> const& {
     return _highlights;
 }
 

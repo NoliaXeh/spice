@@ -286,3 +286,28 @@ TEST_CASE("core::Pane narrow panes keep every column for text") {
     CHECK_EQ(grid.char_at({ 1, 1, 0 }), "n"); // text starts flush left
     CHECK_EQ(pane.position_from_screen(area, { 1, 1, 0 }), Position { 0, 0, 0 });
 }
+
+TEST_CASE("core::Pane::scroll_by() wheels the view without moving the cursor") {
+    Grid grid { 40, 10 };
+    Theme theme;
+    Pane pane { PaneType::edit, make_buffer("a\nb\nc\nd\ne\nf\ng\nh") };
+    Rectangle const area { { 0, 0, 0 }, 30, 5 }; // 3 content rows
+
+    pane.scroll_by(4);
+    CHECK_EQ(pane.scroll().line, 4u);
+    CHECK_EQ(pane.cursor(), Position { 0, 0, 0 });
+
+    // a draw must not snap the view back to the cursor while wheeled away
+    pane.draw(grid, area, true, theme);
+    CHECK_EQ(pane.scroll().line, 4u);
+
+    // moving the cursor re-engages following: the view returns to it
+    pane.set_cursor({ 0, 0, 0 });
+    pane.draw(grid, area, true, theme);
+    CHECK_EQ(pane.scroll().line, 0u);
+
+    pane.scroll_by(-99); // clamped at the top
+    CHECK_EQ(pane.scroll().line, 0u);
+    pane.scroll_by(99);  // and at the last line
+    CHECK_EQ(pane.scroll().line, 7u);
+}

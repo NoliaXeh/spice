@@ -286,7 +286,10 @@ Decoration, not content: colored spans painted over a buffer's text wherever it 
 notify  buffer.set_highlights  { buffer, highlights: [{range, fg}, ...] }
 ```
 
-- Replaces the buffer's **whole** set - one set per buffer, last writer wins.
+- Replaces the **sender's own layer** on that buffer. Every plugin owns one layer per
+  buffer; layers stack in `[[plugin]]` declaration order, later plugins painting over
+  earlier ones where spans overlap - so a coarse highlighter declared first fills whatever
+  a precise one declared after it leaves uncolored. An empty list drops the layer.
 - `fg` is `0xRRGGBB`; ranges are byte-addressed like every range here. Selection beats
   decoration when both cover a cell.
 - The core never rebases or invalidates them: after an edit they may briefly sit on the

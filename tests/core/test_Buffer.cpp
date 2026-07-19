@@ -462,3 +462,37 @@ TEST_CASE("core::Buffer journal versions bracket the changes") {
     CHECK_EQ(buffer.version(), before + 2);
     CHECK_EQ(set.splices.size(), 2u);
 }
+
+// ---------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------
+
+TEST_CASE("core::Buffer::find() walks matches and wraps") {
+    Buffer buffer { "b", BufferCapability::editable, "one fish\ntwo fish\nred" };
+
+    auto first { buffer.find("fish", { 0, 0, 0 }) };
+    REQUIRE(first.has_value());
+    CHECK_EQ(first->first, Position { 0, 4, 0 });
+    CHECK_EQ(first->second, Position { 0, 8, 0 });
+
+    // searching from a match's end finds the next one...
+    auto second { buffer.find("fish", first->second) };
+    REQUIRE(second.has_value());
+    CHECK_EQ(second->first, Position { 1, 4, 0 });
+
+    // ...and past the last one it wraps to the first again
+    auto wrapped { buffer.find("fish", second->second) };
+    REQUIRE(wrapped.has_value());
+    CHECK_EQ(wrapped->first, Position { 0, 4, 0 });
+
+    CHECK_FALSE(buffer.find("shark", { 0, 0, 0 }).has_value());
+    CHECK_FALSE(buffer.find("", { 0, 0, 0 }).has_value());
+}
+
+TEST_CASE("core::Buffer::find() speaks character columns through UTF-8") {
+    Buffer buffer { "b", BufferCapability::editable, "\xc3\xa9\xc3\xa9zap" }; // éézap
+    auto const match { buffer.find("zap", { 0, 0, 0 }) };
+    REQUIRE(match.has_value());
+    CHECK_EQ(match->first, Position { 0, 2, 0 });  // after two 2-byte chars
+    CHECK_EQ(match->second, Position { 0, 5, 0 });
+}

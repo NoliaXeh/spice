@@ -52,6 +52,9 @@ struct Config {
     std::vector<Keybind> user_keybinds;  //!< from config.toml: never written
     std::vector<Keybind> state_keybinds; //!< from keybinds.toml: Spice-owned
 
+    // [editor]
+    uint32_t indent { 4 }; //!< spaces per TAB press (1..16)
+
     // [lifecycle]
     std::chrono::milliseconds shutdown_grace { 2000 };
     std::chrono::milliseconds sigterm_grace { 1000 };

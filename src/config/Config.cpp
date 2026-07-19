@@ -192,6 +192,16 @@ auto read_file(std::string const& path, bool full, Config& config) -> std::vecto
             config.palette_bind = *value;
         }
 
+        if (auto const value { table["editor"]["indent"].value<int64_t>() }) {
+            if (*value >= 1 && *value <= 16) {
+                config.indent = static_cast<uint32_t>(*value);
+            } else {
+                config.warnings.push_back(
+                    std::format("editor indent {} is not between 1 and 16", *value)
+                );
+            }
+        }
+
         auto const read_grace = [&](char const* name, std::chrono::milliseconds& out) {
             if (auto const value { table["lifecycle"][name].value<std::string>() }) {
                 if (auto const parsed { parse_duration(*value) }) {

@@ -433,13 +433,20 @@ notify  buffer.set_highlights  { buffer, highlights: [{range, fg: 0xRRGGBB}, ...
 ```
 
 Paints foreground colors over a buffer's text wherever it is shown - the syntax-highlighting
-primitive. The list **replaces** the buffer's whole set. Ranges are byte-addressed; after an
-edit your spans drift until you recompute, so subscribe to `spice.buffer.changed` and resend.
+primitive. The list **replaces your own layer** on that buffer; other plugins' layers are
+untouched. Layers stack in `[[plugin]]` declaration order - later entries paint over earlier
+ones, earlier ones show through the gaps - so a regex keyword-colorer declared *before* an
+LSP highlighter fills in exactly what the LSP leaves uncolored. Ranges are byte-addressed;
+after an edit your spans drift until you recompute, so subscribe to `spice.buffer.changed`
+and resend.
 
-A complete working example lives in this repository:
-[`plugins/cpp-keywords/cpp_keywords.py`](plugins/cpp-keywords/cpp_keywords.py) colors C++
-keywords pink in every `.cpp`/`.hpp` buffer - self-contained Python, msgpack included, ~200
-lines.
+Two complete working examples live in this repository, both self-contained Python:
+
+- [`plugins/cpp-keywords/cpp_keywords.py`](plugins/cpp-keywords/cpp_keywords.py) colors C++
+  keywords pink with a regex - the minimal highlighter, ~200 lines.
+- [`plugins/lsp-highlight/lsp_highlight.py`](plugins/lsp-highlight/lsp_highlight.py) bridges
+  **any LSP server** (clangd, rust-analyzer, pylsp...): semantic tokens in, highlight spans
+  out, including the LSP UTF-16-to-byte column conversion that must never leak into the core.
 
 ### How a response tells you it failed
 

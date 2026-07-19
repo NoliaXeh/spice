@@ -66,6 +66,7 @@ auto Pane::cursor() const -> Position {
 
 auto Pane::set_cursor(Position position) -> void {
     _cursor = clamp(position);
+    _free_scroll = false; // moving the cursor re-engages view following
 }
 
 auto Pane::read_only() const -> bool {
@@ -127,6 +128,13 @@ auto Pane::scroll_to_bottom(Rectangle area) -> void {
     uint32_t const lines { _buffer->line_count() };
     _scroll.line = lines > content.height ? lines - content.height : 0;
     _scroll.column = 0;
+}
+
+auto Pane::scroll_by(int lines) -> void {
+    auto const last { static_cast<int>(_buffer->line_count()) - 1 };
+    auto const target { std::clamp(static_cast<int>(_scroll.line) + lines, 0, last) };
+    _scroll.line = static_cast<uint32_t>(target);
+    _free_scroll = true;
 }
 
 auto Pane::content_area(Rectangle area) -> Rectangle {
@@ -219,7 +227,7 @@ auto Pane::draw(Grid& grid, Rectangle area, bool focused, Theme const& theme) ->
     // content; edit panes scroll to keep the cursor in view, other pane
     // types keep the scroll they were given (scrollback, plugin-driven)
     auto const content { content_area(area) };
-    if (_type == PaneType::edit) {
+    if (_type == PaneType::edit && !_free_scroll) {
         Rectangle text_area { content }; // what remains beside the gutter
         uint32_t const gutter { gutter_width(content) };
         text_area.position.column += gutter;
@@ -430,14 +438,18 @@ auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Them
         };
         Color const row_background { at_cursor ? cursor_line : background };
 
-        // only this line's highlight spans, so the cell loop stays cheap
+        // only this line's highlight spans, gathered bottom layer first,
+        // so the cell loop stays cheap
         std::vector<std::reference_wrapper<Buffer::Highlight const>> row_spans;
-        for (Buffer::Highlight const& span : _buffer->highlights()) {
-            if (span.start_line <= buffer_line && buffer_line <= span.end_line) {
-                row_spans.emplace_back(span);
+        for (auto const& [layer, spans] : _buffer->highlights()) {
+            for (Buffer::Highlight const& span : spans) {
+                if (span.start_line <= buffer_line && buffer_line <= span.end_line) {
+                    row_spans.emplace_back(span);
+                }
             }
         }
         auto const highlighted = [&](size_t byte) -> std::optional<Color> {
+            std::optional<Color> top; // the last hit is the topmost layer's
             for (Buffer::Highlight const& span : row_spans) {
                 bool const after_start {
                     buffer_line > span.start_line || byte >= span.start_byte
@@ -446,7 +458,7 @@ auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Them
                     buffer_line < span.end_line || byte < span.end_byte
                 };
                 if (after_start && before_end) {
-                    return Color {
+                    top = Color {
                         static_cast<uint8_t>(span.rgb >> 16U),
                         static_cast<uint8_t>(span.rgb >> 8U),
                         static_cast<uint8_t>(span.rgb),
@@ -454,7 +466,7 @@ auto Pane::draw_buffer_content(Grid& grid, Rectangle content, bool focused, Them
                     };
                 }
             }
-            return std::nullopt;
+            return top;
         };
 
         // the gutter: this row's line number, right-aligned, dimmed -

@@ -75,6 +75,11 @@ public:
     //! Scrolls so the buffer's last lines fill the view (scrollback style).
     auto scroll_to_bottom(Rectangle area) -> void;
 
+    //! Scrolls the view by `lines` (negative = up) without moving the
+    //! cursor. The view stops following the cursor until the cursor next
+    //! moves - so wheeling away to read something stays where you wheeled.
+    auto scroll_by(int lines) -> void;
+
     //! The rectangle inside the chrome where content shows (empty when the
     //! area is too small): below the title bar, inside the side borders.
     static auto content_area(Rectangle area) -> Rectangle;
@@ -135,6 +140,7 @@ private:
     bool _read_only { false };
     Position _cursor { 0, 0, 0 };
     Position _scroll { 0, 0, 0 };
+    bool _free_scroll { false }; //!< wheeled away: stop chasing the cursor
     std::optional<Position> _anchor;
 };
 

@@ -369,7 +369,7 @@ auto PluginHost::handle_session_notify(Plugin& plugin, Message const& message) -
                 static_cast<uint32_t>(entry["fg"].as_int()),
             });
         }
-        _services.set_highlights(id_of("buffer"), spans);
+        _services.set_highlights(name, id_of("buffer"), spans);
     } else if (method == "grid.update") {
         GridUpdate update { decode_grid_update(params) };
         uint64_t const cells { static_cast<uint64_t>(update.rows) * update.cols };

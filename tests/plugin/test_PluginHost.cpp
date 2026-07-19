@@ -83,8 +83,9 @@ public:
     ) -> SpliceStatus override {
         return splice(b, {}, "", v, nv);
     }
-    auto set_highlights(uint64_t, std::vector<HighlightSpan> const& spans)
-        -> void override {
+    auto set_highlights(
+        std::string const&, uint64_t, std::vector<HighlightSpan> const& spans
+    ) -> void override {
         highlights = spans;
     }
 };
@@ -280,6 +281,43 @@ TEST_CASE("plugin host: the cpp-keywords plugin paints keywords pink") {
     CHECK_EQ(services.highlights[1].range.start.line, 1u);
     CHECK_EQ(services.highlights[1].range.start.column, 4u);
     CHECK_EQ(services.highlights[1].range.end.column, 10u);  // return
+}
+
+TEST_CASE("plugin host: lsp-highlight bridges clangd's semantic tokens") {
+    if (std::system("command -v python3 >/dev/null 2>&1") != 0
+        || std::system("command -v clangd >/dev/null 2>&1") != 0) {
+        return; // the bridge needs both ends installed
+    }
+    FakeServices services;
+    services.buffer_name = "/tmp/spice-lsp-demo.cpp"; // need not exist on disk
+    services.lines = { "int add(int a, int b) { return a + b; }" };
+    PluginHost host { services };
+    REQUIRE(host.start({
+        "lsp-highlight", { "python3", LSP_HIGHLIGHT_PATH, "clangd" }, false
+    }));
+
+    // announce the buffer until the whole pipeline answers: hello -> ready,
+    // LSP initialize, didOpen, semanticTokens, set_highlights
+    auto const deadline { std::chrono::steady_clock::now() + std::chrono::seconds(15) };
+    while (services.highlights.empty() && std::chrono::steady_clock::now() < deadline) {
+        host.emit("spice.buffer.created", Value::object({
+            { "buffer", Value { services.the_buffer } },
+            { "caps", Value { "editable" } },
+        }));
+        host.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    REQUIRE_FALSE(services.highlights.empty());
+    bool found_function { false }; // clangd marks "add" a function: cols 4-7
+    for (auto const& span : services.highlights) {
+        if (span.range.start.line == 0 && span.range.start.column == 4
+            && span.range.end.column == 7) {
+            found_function = true;
+            CHECK_EQ(span.fg, 0x61AFEFu); // the function color
+        }
+    }
+    CHECK(found_function);
 }
 
 TEST_CASE("plugin host: the restart policy relaunches a crashed plugin") {
