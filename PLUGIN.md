@@ -444,6 +444,9 @@ Two complete working examples live in this repository, both self-contained Pytho
 
 - [`plugins/cpp-keywords/cpp_keywords.py`](plugins/cpp-keywords/cpp_keywords.py) colors C++
   keywords pink with a regex - the minimal highlighter, ~200 lines.
+- [`plugins/lsp-complete/lsp_complete.py`](plugins/lsp-complete/lsp_complete.py) turns an LSP
+  server's completions into cursor edits: `pane.info` -> `buffer.get_lines` -> LSP -> a
+  versioned `buffer.splice` -> `pane.set_cursor`, cycling through candidates.
 - [`plugins/lsp-highlight/lsp_highlight.py`](plugins/lsp-highlight/lsp_highlight.py) bridges
   **any LSP server** (clangd, rust-analyzer, pylsp...): semantic tokens in, highlight spans
   out, including the LSP UTF-16-to-byte column conversion that must never leak into the core.
@@ -484,6 +487,22 @@ Since `pane.open` is fire-and-forget, **it does not tell you the new pane's id.*
 `pane.set_buffer` repoints a pane at another buffer; the pane's cursor and scroll reset.
 `buffer.kill` drops a buffer from the session - silently refused while any pane still shows
 it (close or repoint the pane first). Success is visible as `spice.buffer.killed`.
+
+### Where is the cursor?
+
+The one read that is not about a buffer - the starting point for anything cursor-aware
+(completion, a hover, a "run this line"):
+
+```
+request pane.info        { pane }              → { buffer, cursor: {line, col}, kind }
+notify  pane.set_cursor  { pane, pos: {line, col} }
+```
+
+`cursor.col` is a byte offset, like every column here. `pane.set_cursor` moves the cursor
+(dropping any selection); the core does **not** move a view's cursor to follow your edits, so
+after you `buffer.splice` text in at the cursor, place the cursor past it yourself. Read the
+cursor, compute against a fresh `buffer.get_lines`, splice with the version it returned, then
+`pane.set_cursor` - that is the whole insert-at-cursor pattern.
 
 ## Drawing: GridPanes
 

@@ -1,0 +1,29 @@
+# LSP autocomplete from clangd (or any server - swap the argv):
+#
+#     ./build/spice --config examples/lsp-complete.toml examples/demo.cpp
+#
+# Put the cursor after a half-typed identifier and run "Complete (LSP)"
+# from the palette (ctrl-p). It replaces the prefix with the best match;
+# "Complete: next" / "Complete: previous" cycle through the rest. Bind them
+# to keys for a fast loop - f9 / f10 / f11 below.
+
+[[plugin]]
+name    = "lsp-complete"
+command = ["python3", "plugins/lsp-complete/lsp_complete.py", "clangd"]
+mode    = "global"
+restart = "on-crash"
+
+[[keybind]]
+key     = "f9"
+plugin  = "lsp-complete"
+command = "complete"
+
+[[keybind]]
+key     = "f10"
+plugin  = "lsp-complete"
+command = "complete_next"
+
+[[keybind]]
+key     = "f11"
+plugin  = "lsp-complete"
+command = "complete_prev"

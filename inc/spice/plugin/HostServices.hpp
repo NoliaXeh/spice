@@ -71,6 +71,14 @@ struct MarkInfo {
     bool valid { true };
 };
 
+//! A pane's state as a plugin sees it (byte columns, like the protocol).
+struct PaneInfo {
+    uint64_t buffer { 0 };
+    uint64_t cursor_line { 0 };
+    uint64_t cursor_column { 0 }; //!< byte offset into the line
+    std::string kind;             //!< "edit" | "grid" | "pty"
+};
+
 //! One highlight: `range` drawn with foreground `fg` (0xRRGGBB).
 struct HighlightSpan {
     BufferRange range;
@@ -173,6 +181,18 @@ public:
     //! before its hello. {0, 0} when the host cannot provide one.
     virtual auto plugin_pane(std::string const& plugin) -> std::pair<uint64_t, uint64_t> {
         (void)plugin; return { 0, 0 };
+    }
+
+    //! A pane's live state for a plugin: the buffer it views, its cursor
+    //! (byte column, like every protocol position), and its kind
+    //! ("edit" | "grid" | "pty"). Nothing when there is no such pane.
+    virtual auto pane_info(uint64_t pane) -> std::optional<PaneInfo> {
+        (void)pane; return std::nullopt;
+    }
+    //! Moves a pane's cursor to `position` (byte column, clamped into the
+    //! buffer). Drops any selection. Unknown panes are ignored.
+    virtual auto set_cursor(uint64_t pane, BufferPosition position) -> void {
+        (void)pane; (void)position;
     }
 
     //! Replaces `plugin`'s decoration layer on a buffer: colored spans

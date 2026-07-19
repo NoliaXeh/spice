@@ -16,6 +16,7 @@ target_compile_definitions(plugin_test PRIVATE
     GREETER_PATH="${CMAKE_BINARY_DIR}/plugins/greeter/spice-greeter"
     CPP_KEYWORDS_PATH="${CMAKE_SOURCE_DIR}/plugins/cpp-keywords/cpp_keywords.py"
     LSP_HIGHLIGHT_PATH="${CMAKE_SOURCE_DIR}/plugins/lsp-highlight/lsp_highlight.py"
+    LSP_COMPLETE_PATH="${CMAKE_SOURCE_DIR}/plugins/lsp-complete/lsp_complete.py"
 )
 
 add_test(NAME plugin_test COMMAND plugin_test)

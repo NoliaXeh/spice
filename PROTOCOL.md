@@ -377,7 +377,9 @@ notify  pane.focus       { pane }
 notify  pane.float       { pane }
 notify  pane.dock        { pane }
 notify  pane.set_buffer  { pane, buffer }
+notify  pane.set_cursor  { pane, pos: {line, col} }
 
+request pane.info        { pane } → { buffer, cursor: {line, col}, kind }
 request buffer.create    { caps?, name? } → { buffer }
 notify  buffer.kill      { buffer }
 
@@ -385,6 +387,12 @@ notify  palette.open     { }
 notify  status.message   { text }
 notify  status.error     { code, message, data? }
 ```
+
+`pane.info` reports a pane's buffer, its cursor (byte column, like every position here), and
+its `kind` (`edit` | `grid` | `pty`) - the read a cursor-aware plugin (completion, a
+context lookup) starts from. `pane.set_cursor` moves the cursor there, dropping any selection;
+paired with a `buffer.splice`, it is how a plugin inserts at the cursor and lands the cursor
+after the insertion (the core does not move a view's cursor to follow a plugin's edit).
 
 ## Commands
 

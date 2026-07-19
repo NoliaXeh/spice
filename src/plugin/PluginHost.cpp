@@ -393,6 +393,11 @@ auto PluginHost::handle_session_notify(Plugin& plugin, Message const& message) -
             static_cast<uint64_t>(params["pos"]["col"].as_int()),
             params["visible"].as_bool(true)
         );
+    } else if (method == "pane.set_cursor") {
+        _services.set_cursor(id_of("pane"), {
+            static_cast<uint64_t>(params["pos"]["line"].as_int()),
+            static_cast<uint64_t>(params["pos"]["col"].as_int()),
+        });
     } else {
         return false;
     }
@@ -477,9 +482,29 @@ auto PluginHost::handle_request(Plugin& plugin, Message const& message) -> void 
         request_mark_delete(plugin, message);
     } else if (method == "topics.list") {
         request_topics_list(plugin, message);
+    } else if (method == "pane.info") {
+        request_pane_info(plugin, message);
     } else {
         respond_failure(plugin, message, "spice.core.unknown_method");
     }
+}
+
+auto PluginHost::request_pane_info(Plugin& plugin, Message const& message) -> void {
+    auto const info { _services.pane_info(
+        static_cast<uint64_t>(message.params["pane"].as_int())
+    ) };
+    if (!info) {
+        respond_failure(plugin, message, "spice.core.no_such_id");
+        return;
+    }
+    respond(plugin, message, Value::object({
+        { "buffer", Value { info->buffer } },
+        { "cursor", Value::object({
+            { "line", Value { info->cursor_line } },
+            { "col", Value { info->cursor_column } },
+        }) },
+        { "kind", Value { info->kind } },
+    }));
 }
 
 auto PluginHost::request_buffer_info(Plugin& plugin, Message const& message) -> void {

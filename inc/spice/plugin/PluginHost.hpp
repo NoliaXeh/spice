@@ -118,6 +118,7 @@ private:
     auto request_mark_delete(Plugin& plugin, Message const& message) -> void;
     //! The discoverable topic registry: every ready plugin's `publishes`.
     auto request_topics_list(Plugin& plugin, Message const& message) -> void;
+    auto request_pane_info(Plugin& plugin, Message const& message) -> void;
     //! The success response to `message`.
     auto respond(Plugin& plugin, Message const& message, msgpack::Value result) -> void;
     //! The failure response: `code` plus whatever `extra` fields.

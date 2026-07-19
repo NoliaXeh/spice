@@ -234,6 +234,8 @@ public:
         -> std::optional<std::pair<plugin::MarkInfo, uint64_t>> override;
     auto delete_mark(uint64_t buffer, uint64_t mark) -> bool override;
     auto plugin_pane(std::string const& plugin) -> std::pair<uint64_t, uint64_t> override;
+    auto pane_info(uint64_t pane) -> std::optional<plugin::PaneInfo> override;
+    auto set_cursor(uint64_t pane, plugin::BufferPosition position) -> void override;
     auto set_highlights(
         std::string const& plugin, uint64_t buffer,
         std::vector<plugin::HighlightSpan> const& spans
@@ -1182,6 +1184,34 @@ auto App::plugin_pane(std::string const& plugin) -> std::pair<uint64_t, uint64_t
     }
     _full_repaint = true;
     return { pane, buffer_id };
+}
+
+auto App::pane_info(uint64_t pane) -> std::optional<plugin::PaneInfo> {
+    auto const target { _session.pane(static_cast<uint32_t>(pane)) };
+    if (!target) {
+        return std::nullopt;
+    }
+    // the core keeps the cursor in character columns; the protocol in bytes
+    core::Position const cursor { target->cursor() };
+    std::string_view const line { target->buffer()->line(cursor.line) };
+    auto const cursor_byte { static_cast<uint64_t>(
+        core::utf8_offset(line, cursor.column)) };
+    return plugin::PaneInfo {
+        buffer_id_for(target->buffer()),
+        cursor.line,
+        cursor_byte,
+        pane_kind(target->type()),
+    };
+}
+
+auto App::set_cursor(uint64_t pane, plugin::BufferPosition position) -> void {
+    auto const target { _session.pane(static_cast<uint32_t>(pane)) };
+    if (!target) {
+        return;
+    }
+    target->clear_anchor(); // a jump drops any selection
+    target->set_cursor(protocol_position(*target->buffer(), position));
+    mark_focused();
 }
 
 auto App::ready() const -> bool {

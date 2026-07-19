@@ -28,6 +28,13 @@ public:
     uint64_t version { 3 };
     std::vector<HighlightSpan> highlights; //!< last set_highlights payload
 
+    // a one-pane world, for cursor-aware tests
+    uint64_t the_pane { 4 };
+    uint64_t cursor_line { 0 };
+    uint64_t cursor_col { 0 };       //!< byte offset
+    std::string last_splice_text;    //!< text of the last splice applied
+    uint64_t last_cursor_set { 0 };  //!< col of the last set_cursor
+
     auto register_commands(std::string const&, std::vector<PluginCommand> const& c)
         -> void override { for (auto const& x : c) commands.push_back(x); }
     auto unregister_commands(std::string const&, std::vector<std::string> const& n)
@@ -71,12 +78,20 @@ public:
     }
     auto create_buffer(bool, std::string const&) -> uint64_t override { return 99; }
     auto kill_buffer(uint64_t) -> void override {}
-    auto splice(uint64_t b, BufferRange, std::string const&, uint64_t v, uint64_t& nv)
+    auto splice(uint64_t b, BufferRange, std::string const& text, uint64_t v, uint64_t& nv)
         -> SpliceStatus override {
         if (b != the_buffer) return SpliceStatus::no_such_id;
         if (v != version) { nv = version; return SpliceStatus::stale_version; }
+        last_splice_text = text;
         nv = ++version;
         return SpliceStatus::ok;
+    }
+    auto pane_info(uint64_t p) -> std::optional<PaneInfo> override {
+        if (p != the_pane) return std::nullopt;
+        return PaneInfo { the_buffer, cursor_line, cursor_col, "edit" };
+    }
+    auto set_cursor(uint64_t, BufferPosition pos) -> void override {
+        last_cursor_set = pos.column;
     }
     auto splice_many(
         uint64_t b, std::vector<Splice> const&, uint64_t v, uint64_t& nv
@@ -318,6 +333,64 @@ TEST_CASE("plugin host: lsp-highlight bridges clangd's semantic tokens") {
         }
     }
     CHECK(found_function);
+}
+
+TEST_CASE("plugin host: lsp-complete inserts a clangd completion at the cursor") {
+    if (std::system("command -v python3 >/dev/null 2>&1") != 0
+        || std::system("command -v clangd >/dev/null 2>&1") != 0) {
+        return; // needs both ends installed
+    }
+    FakeServices services;
+    services.buffer_name = "/tmp/spice-complete-demo.cpp"; // need not exist on disk
+    services.lines = {
+        "struct Widget { int height; };",
+        "int value(Widget w) { return w.he; }",
+    };
+    // the cursor sits right after "w.he" (byte column), where completion runs
+    std::string const& line1 { services.lines[1] };
+    services.cursor_line = 1;
+    services.cursor_col = line1.find("he") + 2; // just past "he"
+
+    PluginHost host { services };
+    REQUIRE(host.start({
+        "lsp-complete", { "python3", LSP_COMPLETE_PATH, "clangd" }, false
+    }));
+
+    // wait for the handshake (commands registered = the plugin is ready and
+    // subscribed), then announce the buffer so it opens it with clangd
+    pump_until(host, [&] { return services.commands.size() >= 3; });
+    for (int i { 0 }; i < 20; ++i) {
+        host.emit("spice.buffer.created", Value::object({
+            { "buffer", Value { services.the_buffer } },
+            { "caps", Value { "editable" } },
+        }));
+        host.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // invoke completion; drive the pane.info -> get_lines -> LSP -> splice chain
+    host.emit("spice.palette.command_invoked", Value::object({
+        { "plugin", Value { "lsp-complete" } },
+        { "command", Value { "complete" } },
+        { "pane", Value { services.the_pane } },
+    }));
+    // cursor-set is the last link in the chain, so waiting on it covers the
+    // whole flow: pane.info -> get_lines -> LSP -> splice -> set_cursor
+    auto const deadline { std::chrono::steady_clock::now() + std::chrono::seconds(20) };
+    while (services.last_cursor_set == 0
+           && std::chrono::steady_clock::now() < deadline) {
+        host.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // "w.he" has exactly one member match: height
+    CHECK_EQ(services.last_splice_text, "height");
+    // and the cursor was placed just past the inserted word
+    uint64_t const start { services.cursor_col - 2 };      // where "he" began
+    CHECK_EQ(services.last_cursor_set, start + 6);          // + len("height")
+    // the status reports the pick and the candidate count
+    REQUIRE_FALSE(services.statuses.empty());
+    CHECK_NE(services.statuses.back().find("height"), std::string::npos);
 }
 
 TEST_CASE("plugin host: the restart policy relaunches a crashed plugin") {

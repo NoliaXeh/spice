@@ -38,6 +38,7 @@ install(TARGETS spice RUNTIME DESTINATION bin)
 install(PROGRAMS
     plugins/cpp-keywords/cpp_keywords.py
     plugins/lsp-highlight/lsp_highlight.py
+    plugins/lsp-complete/lsp_complete.py
     DESTINATION share/spice/plugins
 )
 install(FILES README.md CONFIG.md PLUGIN.md PROTOCOL.md
